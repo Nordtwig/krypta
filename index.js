@@ -12,10 +12,11 @@ function createWindow() {
     win = new BrowserWindow({
         width: 700,
         height: 500,
-        titleBarStyle: 'hidden',
         webPreferences: {
-            nodeIntegration: true
-        }
+            nodeIntegration: true,
+            contextIsolation: false
+        },
+        titleBarStyle: 'hidden'
     })
     win.loadURL(url.format({
         pathname: path.join(__dirname, "index.html"),

@@ -1,0 +1,8 @@
+body {
+    background-color: rgba(9, 37, 49, 0.867);
+    color: #eee4ca;
+}
+
+#explorer li:hover {
+    color: #dd0067;
+}

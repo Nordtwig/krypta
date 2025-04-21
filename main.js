@@ -1,4 +1,3 @@
-const { log } = require("console")
 const fs = require("fs")
 const path = require("path")
 
@@ -9,7 +8,22 @@ btnDelete = document.getElementById("btnDelete")
 fileName = document.getElementById("fileName")
 fileContents = document.getElementById("fileContents")
 
-let pathName = path.join(__dirname, "files")
+let pathName = path.join(__dirname, "/")
+let directoryPath = path.join("/")
+
+explorer = document.getElementById("explorer")
+
+fs.readdir(directoryPath, function(error, files) {
+    if (error)
+        return console.log("Unable to scan directory: " + error);
+    console.log(files);
+        
+    files.forEach(function(file) {
+        const newItem = document.createElement("li")
+        newItem.textContent = file
+        explorer.appendChild(newItem)
+    })
+})
 
 btnCreate.addEventListener("click", function() {
     let file = path.join(pathName, fileName.value)
@@ -33,7 +47,7 @@ btnRead.addEventListener("click", function() {
     })
 })
 
-btnDelte.addEventListener("click", function() {
+btnDelete.addEventListener("click", function() {
     let file = path.join(pathName, fileName.value)
     fs.unlink(file, function(error) {
         if (error)
