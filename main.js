@@ -9,18 +9,23 @@ fileName = document.getElementById("fileName")
 fileContents = document.getElementById("fileContents")
 
 let pathName = path.join(__dirname, "/")
-let directoryPath = path.join("/")
+// let directoryPath = path.join("/development/bohus")
+
 
 explorer = document.getElementById("explorer")
 
-fs.readdir(directoryPath, function(error, files) {
+fs.readdir("/home/noah/development/bohus/", { withFileTypes: true }, function(error, files) {
     if (error)
         return console.log("Unable to scan directory: " + error);
-    console.log(files);
-        
+
     files.forEach(function(file) {
+        // if (fs.statSync("/" + file).isFile())
+        //     fs.readFile("/" + file, function(error, data) {
+        //         console.log(data)
+        //     })
+        console.log(file)
         const newItem = document.createElement("li")
-        newItem.textContent = file
+        newItem.textContent = file.name
         explorer.appendChild(newItem)
     })
 })
