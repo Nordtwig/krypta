@@ -16,7 +16,7 @@ function createWindow() {
             nodeIntegration: true,
             contextIsolation: false
         },
-        titleBarStyle: 'hidden'
+        // titleBarStyle: 'hidden'
     })
     win.loadURL(url.format({
         pathname: path.join(__dirname, "index.html"),
@@ -29,6 +29,7 @@ function createWindow() {
     })
 }
 
+app.disableHardwareAcceleration(); 
 app.on("ready", createWindow)
 app.on("window-all-closed", () => {
     if (process.platform !== "darwin") {

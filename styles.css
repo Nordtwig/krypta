@@ -3,6 +3,26 @@ body {
     color: #eee4ca;
 }
 
+#explorer li {
+    list-style: none;
+}
+
 #explorer li:hover {
     color: #dd0067;
+}
+
+.folder-icon {
+    background: url("resources/folder.svg");
+    height: 20px;
+    width: 20px;
+    display: inline-block;
+    margin: auto;
+}
+
+.file-icon {
+    background: url("resources/file.svg");
+    height: 20px;
+    width: 20px;
+    display: inline-block;
+    margin: auto;
 }
