@@ -3,12 +3,23 @@ body {
     color: #eee4ca;
 }
 
-#explorer li {
-    list-style: none;
+#explorer {
+    width: 100%;
 }
 
-#explorer li:hover {
+#explorer tr {
+    list-style: none;
+    display: block;
+}
+
+#explorer tr:hover {
     color: #ED706E;
+    cursor: pointer;
+}
+
+#path {
+    cursor: pointer;
+    display: block;
 }
 
 .folder-icon {
