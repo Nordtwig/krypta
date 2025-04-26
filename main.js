@@ -15,8 +15,7 @@ pathElement.textContent = pathName;
 pathElement.addEventListener(
   "input",
   function (event) {
-    console.log(event.data);
-    console.log(event.inputType);
+    console.log(event.data); 
   },
   false
 );
