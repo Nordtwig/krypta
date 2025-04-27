@@ -1,16 +1,19 @@
 const fs = require("fs");
 const path = require("path");
 const { shell } = require("electron");
+const Operative = require("./operative")
 
 fileName = document.getElementById("fileName");
 fileContents = document.getElementById("fileContents");
 
-let pathName = path.join(__dirname, "/");
 
 explorer = document.getElementById("explorer");
 
+const op = new Operative()
+let currentDir = op.homedir + path.sep;
+
 const pathElement = document.getElementById("path");
-pathElement.textContent = pathName;
+pathElement.textContent = currentDir;
 
 pathElement.addEventListener(
   "input",
@@ -28,11 +31,9 @@ pathElement.addEventListener("keydown", (event) => {
 });
 
 function refreshExplorer() {
-  console.log(pathName);
-  pathElement.textContent = pathName;
+  pathElement.textContent = currentDir;
   explorer.innerHTML = "";
 
-  console.log(pathName.split(/[\\/]/));
   const headerRowElement = document.createElement("tr");
   const headerColumnValues = ["", "Name"];
 
@@ -43,29 +44,29 @@ function refreshExplorer() {
   });
 
   explorer.appendChild(headerRowElement);
-  const splitPathName = pathName.split(/[\\/]/);
-  splitPathName.pop();
-  splitPathName.pop();
-  const backPath = splitPathName.join("\\");
-  const backRow = createExplorerRowItem("folder-icon", "..", backPath + "\\");
+  const splitcurrentDir = currentDir.split(/[\\/]/);
+  splitcurrentDir.pop();
+  splitcurrentDir.pop();
+  const backPath = splitcurrentDir.join(path.sep);
+  const backRow = createExplorerRowItem("folder-icon", "..", backPath + path.sep);
   backRow.addEventListener("dblclick", () => {
-    pathName = backRow.id;
+    currentDir = backRow.id;
     refreshExplorer();
   });
 
-  fs.readdir(pathName, { withFileTypes: true }, function (error, files) {
+  fs.readdir(currentDir, { withFileTypes: true }, function (error, files) {
     if (error) return console.log("Unable to scan directory: " + error);
 
     files.sort((a, b) => a.name.localeCompare(b.name));
 
     files.forEach(function (file) {
-      if (fs.statSync(pathName + file.name).isFile()) {
-        fs.readFile(pathName + file.name, function (error, data) {
+      if (fs.statSync(currentDir + file.name).isFile()) {
+        fs.readFile(currentDir + file.name, function (error, data) {
           if (error) return console.log(error);
           const newRow = createExplorerRowItem(
             "file-icon",
             file.name,
-            pathName + file.name
+            currentDir + file.name
           );
           newRow.addEventListener("dblclick", () => {
             shell.openPath(newRow.id);
@@ -75,10 +76,10 @@ function refreshExplorer() {
         const newRow = createExplorerRowItem(
           "folder-icon",
           file.name,
-          pathName + file.name + "\\"
+          currentDir + file.name + path.sep
         );
         newRow.addEventListener("dblclick", () => {
-          pathName = newRow.id;
+          currentDir = newRow.id;
           refreshExplorer();
         });
       }
@@ -90,19 +91,19 @@ function updatePath() {
   pathElement.blur();
   let newPath = pathElement.textContent;
 
-  if (newPath.length == 0) newPath = pathName.split(/[\\/]/)[0];
+  if (newPath.length == 0) newPath = currentDir.split(/[\\/]/)[0];
 
   if (!newPath.endsWith("\\") || !newPath.endsWith("/")) {
-    newPath += "\\";
+    newPath += path.sep;
   }
-  pathName = newPath;
+  currentDir = newPath;
   refreshExplorer();
 }
 
 function createExplorerRowItem(
   icon = "",
   name = "placeholder",
-  filepath = "/"
+  filepath = path.sep
 ) {
   const newItem = document.createElement("tr");
   const newText = document.createElement("p");
