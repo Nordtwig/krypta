@@ -5,12 +5,10 @@ const Operative = require("./operative")
 
 fileName = document.getElementById("fileName");
 fileContents = document.getElementById("fileContents");
-
-
 explorer = document.getElementById("explorer");
 
 const op = new Operative()
-let currentDir = op.homedir + path.sep;
+let currentDir = op.homeDir;
 
 const pathElement = document.getElementById("path");
 pathElement.textContent = currentDir;
