@@ -1,14 +1,17 @@
 const fs = require("fs");
 const path = require("path");
 const { shell } = require("electron");
-const Operative = require("./operative")
+const OsNavigator = require("./osNavigator");
+const HtmlGenerator = require("./htmlGenerator")
 
 fileName = document.getElementById("fileName");
 fileContents = document.getElementById("fileContents");
 explorer = document.getElementById("explorer");
 
-const op = new Operative()
-let currentDir = op.homeDir;
+const osNav = new OsNavigator
+let currentDir = osNav.homeDir;
+
+const html = new HtmlGenerator
 
 const pathElement = document.getElementById("path");
 pathElement.textContent = currentDir;
@@ -46,7 +49,7 @@ function refreshExplorer() {
   splitcurrentDir.pop();
   splitcurrentDir.pop();
   const backPath = splitcurrentDir.join(path.sep);
-  const backRow = createExplorerRowItem("folder-icon", "..", backPath + path.sep);
+  const backRow = html.createExplorerRowItem("folder-icon", "..", backPath + path.sep);
   backRow.addEventListener("dblclick", () => {
     currentDir = backRow.id;
     refreshExplorer();
@@ -61,7 +64,7 @@ function refreshExplorer() {
       if (fs.statSync(currentDir + file.name).isFile()) {
         fs.readFile(currentDir + file.name, function (error, data) {
           if (error) return console.log(error);
-          const newRow = createExplorerRowItem(
+          const newRow = html.createExplorerRowItem(
             "file-icon",
             file.name,
             currentDir + file.name
@@ -71,7 +74,7 @@ function refreshExplorer() {
           });
         });
       } else {
-        const newRow = createExplorerRowItem(
+        const newRow = html.createExplorerRowItem(
           "folder-icon",
           file.name,
           currentDir + file.name + path.sep
@@ -98,30 +101,6 @@ function updatePath() {
   refreshExplorer();
 }
 
-function createExplorerRowItem(
-  icon = "",
-  name = "placeholder",
-  filepath = path.sep
-) {
-  const newItem = document.createElement("tr");
-  const newText = document.createElement("p");
-  const newIcon = document.createElement("img");
 
-  newIcon.className = icon;
-  newText.textContent = name;
-  newItem.id = filepath;
-
-  newItem.appendChild(tabifyElement(newIcon));
-  newItem.appendChild(tabifyElement(newText));
-  explorer.appendChild(newItem);
-
-  return newItem;
-}
-
-function tabifyElement(element) {
-  const columnElement = document.createElement("td");
-  columnElement.appendChild(element);
-  return columnElement;
-}
 
 refreshExplorer();

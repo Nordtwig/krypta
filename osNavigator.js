@@ -1,11 +1,11 @@
 const os = require("os")
 const path = require("path")
 
-class operative {
+class OsNavigator {
     constructor() {
         this.platform = os.platform()
-        this.homedir = os.homeDir() + path.sep
+        this.homeDir = os.homedir() + path.sep
     }
 }
 
-module.exports = operative
+module.exports = OsNavigator
