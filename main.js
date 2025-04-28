@@ -55,8 +55,10 @@ function refreshExplorer() {
     refreshExplorer();
   });
 
-  fs.readdir(currentDir, { withFileTypes: true }, function (error, files) {
+  fs.readdir(currentDir, { withFileTypes: true }, function (error, rawFiles) {
     if (error) return console.log("Unable to scan directory: " + error);
+
+    const files = rawFiles.filter((file) => !file.name.startsWith("."))
 
     files.sort((a, b) => a.name.localeCompare(b.name));
 

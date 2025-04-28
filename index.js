@@ -16,7 +16,7 @@ function createWindow() {
             nodeIntegration: true,
             contextIsolation: false
         },
-        // titleBarStyle: 'hidden'
+        titleBarStyle: 'hidden'
     })
     win.loadURL(url.format({
         pathname: path.join(__dirname, "index.html"),
