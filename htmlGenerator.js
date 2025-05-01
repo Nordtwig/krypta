@@ -1,6 +1,6 @@
 class HtmlGenerator {
   constructor(separator = "/") {
-    this.separator
+    this.separator = separator
   }
 
   createExplorerHeadItem(rows) {
@@ -15,7 +15,7 @@ class HtmlGenerator {
     explorer.appendChild(headerRowElement);
   }
 
-  createExplorerRowItem(icon = "", name = "placeholder", filepath = separator) {
+  createExplorerRowItem(icon = "", name = "placeholder", filepath = this.separator) {
     const newItem = document.createElement("tr");
     const newText = document.createElement("p");
     const newIcon = document.createElement("img");

@@ -2,27 +2,21 @@ const fs = require("fs");
 const path = require("path");
 const { shell } = require("electron");
 const OsNavigator = require("./osNavigator");
-const HtmlGenerator = require("./htmlGenerator")
+const HtmlGenerator = require("./htmlGenerator");
+const FileProvider = require("./fileProvider");
 
 fileName = document.getElementById("fileName");
 fileContents = document.getElementById("fileContents");
 explorer = document.getElementById("explorer");
 
-const osNav = new OsNavigator
+const osNav = new OsNavigator();
 let currentDir = osNav.homeDir;
 
-const html = new HtmlGenerator
+const fp = new FileProvider();
+const html = new HtmlGenerator();
 
 const pathElement = document.getElementById("path");
 pathElement.textContent = currentDir;
-
-// pathElement.addEventListener(
-//   "input",
-//   function (event) {
-//     console.log(event.data); 
-//   },
-//   false
-// );
 
 pathElement.addEventListener("keydown", (event) => {
   if (event.code === "Enter") {
@@ -31,55 +25,59 @@ pathElement.addEventListener("keydown", (event) => {
   }
 });
 
-function refreshExplorer() {
+async function refreshExplorer() {
   pathElement.textContent = currentDir;
   explorer.innerHTML = "";
-  
-  html.createExplorerHeadItem(["", "Name"])
 
-  const splitcurrentDir = currentDir.split(/[\\/]/);
-  splitcurrentDir.pop();
-  splitcurrentDir.pop();
-  const backPath = splitcurrentDir.join(path.sep);
-  const backRow = html.createExplorerRowItem("folder-icon", "..", backPath + path.sep);
+  html.createExplorerHeadItem(["", "Name"]);
+
+  const backPath = getParentFilePath();
+  const backRow = html.createExplorerRowItem("folder-icon", "..", backPath);
   backRow.addEventListener("dblclick", () => {
     currentDir = backRow.id;
     refreshExplorer();
   });
 
-  fs.readdir(currentDir, { withFileTypes: true }, function (error, rawFiles) {
-    if (error) return console.log("Unable to scan directory: " + error);
+  const files = await fp.getFilesByDirectory(currentDir);
+  console.log(files)
+  files.forEach(() => {
+    console.log("file logged");
+    
+  })
 
-    const files = rawFiles.filter((file) => !file.name.startsWith("."))
-
-    files.sort((a, b) => a.name.localeCompare(b.name));
-
-    files.forEach(function (file) {
-      if (fs.statSync(currentDir + file.name).isFile()) {
-        fs.readFile(currentDir + file.name, function (error, data) {
-          if (error) return console.log(error);
-          const newRow = html.createExplorerRowItem(
-            "file-icon",
-            file.name,
-            currentDir + file.name
-          );
-          newRow.addEventListener("dblclick", () => {
-            shell.openPath(newRow.id);
-          });
-        });
-      } else {
+  files.forEach(function (file) {
+    console.log(file)
+    if (fs.statSync(currentDir + file.name).isFile()) {
+      fs.readFile(currentDir + file.name, function (error, data) {
+        if (error) return console.log(error);
         const newRow = html.createExplorerRowItem(
-          "folder-icon",
+          "file-icon",
           file.name,
-          currentDir + file.name + path.sep
+          currentDir + file.name
         );
         newRow.addEventListener("dblclick", () => {
-          currentDir = newRow.id;
-          refreshExplorer();
+          shell.openPath(newRow.id);
         });
-      }
-    });
+      });
+    } else {
+      const newRow = html.createExplorerRowItem(
+        "folder-icon",
+        file.name,
+        currentDir + file.name + path.sep
+      );
+      newRow.addEventListener("dblclick", () => {
+        currentDir = newRow.id;
+        refreshExplorer();
+      });
+    }
   });
+}
+
+function getParentFilePath() {
+  const splitcurrentDir = currentDir.split(/[\\/]/);
+  splitcurrentDir.pop();
+  splitcurrentDir.pop();
+  return splitcurrentDir.join(path.sep) + path.sep;
 }
 
 function updatePath() {
@@ -94,7 +92,5 @@ function updatePath() {
   currentDir = newPath;
   refreshExplorer();
 }
-
-
 
 refreshExplorer();
