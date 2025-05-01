@@ -24,6 +24,10 @@ p {
     margin: auto;
 }
 
+#explorer th:first-child {
+    width: 20px;
+}
+
 #explorer tr:hover {
     color: #ED706E;
     cursor: pointer;

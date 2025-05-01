@@ -1,6 +1,18 @@
 class HtmlGenerator {
   constructor(separator = "/") {
-	this.separator
+    this.separator
+  }
+
+  createExplorerHeadItem(rows) {
+    const headerRowElement = document.createElement("tr");
+
+    rows.forEach((value) => {
+      const columnElement = document.createElement("th");
+      columnElement.textContent = value;
+      headerRowElement.appendChild(columnElement);
+    });
+
+    explorer.appendChild(headerRowElement);
   }
 
   createExplorerRowItem(icon = "", name = "placeholder", filepath = separator) {
@@ -27,4 +39,3 @@ class HtmlGenerator {
 }
 
 module.exports = HtmlGenerator;
- 

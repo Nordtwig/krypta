@@ -16,13 +16,13 @@ const html = new HtmlGenerator
 const pathElement = document.getElementById("path");
 pathElement.textContent = currentDir;
 
-pathElement.addEventListener(
-  "input",
-  function (event) {
-    console.log(event.data); 
-  },
-  false
-);
+// pathElement.addEventListener(
+//   "input",
+//   function (event) {
+//     console.log(event.data); 
+//   },
+//   false
+// );
 
 pathElement.addEventListener("keydown", (event) => {
   if (event.code === "Enter") {
@@ -34,17 +34,9 @@ pathElement.addEventListener("keydown", (event) => {
 function refreshExplorer() {
   pathElement.textContent = currentDir;
   explorer.innerHTML = "";
+  
+  html.createExplorerHeadItem(["", "Name"])
 
-  const headerRowElement = document.createElement("tr");
-  const headerColumnValues = ["", "Name"];
-
-  headerColumnValues.forEach((value) => {
-    const columnElement = document.createElement("th");
-    columnElement.textContent = value;
-    headerRowElement.appendChild(columnElement);
-  });
-
-  explorer.appendChild(headerRowElement);
   const splitcurrentDir = currentDir.split(/[\\/]/);
   splitcurrentDir.pop();
   splitcurrentDir.pop();
