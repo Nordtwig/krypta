@@ -1,23 +1,23 @@
 const fs = require("fs");
 
-class FileProvider {
-  constructor() {
-  }
-
-  getFilesByDirectory(directory) {
-	const bufferFiles = []
-    fs.readdir(directory, { withFileTypes: true }, function (error, rawFiles) {
+module.exports = {
+  getFilesByDirectory: function (dir, callback) {
+    fs.readdir(dir, { withFileTypes: true }, function (error, rawFiles) {
       if (error) return console.log("Unable to scan directory: " + error);
 
       const files = rawFiles.filter((file) => !file.name.startsWith("."));
 
       files.sort((a, b) => a.name.localeCompare(b.name));
-	
-	  bufferFiles.push(...files)
+
+	  callback(files)
     });
+  },
 
-	return bufferFiles
+  getFileStatsByPath: function(filePath) {
+	console.log(fs.statSync(filePath).isFile())
+  },
+
+  isFile: function(filePath) {
+	return fs.statSync(filePath).isFile()
   }
-}
-
-module.exports = FileProvider;
+};

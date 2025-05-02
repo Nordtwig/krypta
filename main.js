@@ -1,18 +1,15 @@
-const fs = require("fs");
 const path = require("path");
-const { shell } = require("electron");
-const OsNavigator = require("./osNavigator");
+const { shell } = require("electron")
 const HtmlGenerator = require("./htmlGenerator");
-const FileProvider = require("./fileProvider");
+const fileProvider = require("./fileProvider");
+const osNavigator = require("./osNavigator");
 
 fileName = document.getElementById("fileName");
 fileContents = document.getElementById("fileContents");
 explorer = document.getElementById("explorer");
 
-const osNav = new OsNavigator();
-let currentDir = osNav.homeDir;
+let currentDir = osNavigator.homeDir;
 
-const fp = new FileProvider();
 const html = new HtmlGenerator();
 
 const pathElement = document.getElementById("path");
@@ -25,7 +22,7 @@ pathElement.addEventListener("keydown", (event) => {
   }
 });
 
-async function refreshExplorer() {
+function refreshExplorer() {
   pathElement.textContent = currentDir;
   explorer.innerHTML = "";
 
@@ -38,39 +35,35 @@ async function refreshExplorer() {
     refreshExplorer();
   });
 
-  const files = await fp.getFilesByDirectory(currentDir);
-  console.log(files)
-  files.forEach(() => {
-    console.log("file logged");
-    
-  })
-
-  files.forEach(function (file) {
-    console.log(file)
-    if (fs.statSync(currentDir + file.name).isFile()) {
-      fs.readFile(currentDir + file.name, function (error, data) {
-        if (error) return console.log(error);
-        const newRow = html.createExplorerRowItem(
-          "file-icon",
-          file.name,
-          currentDir + file.name
-        );
-        newRow.addEventListener("dblclick", () => {
-          shell.openPath(newRow.id);
-        });
-      });
-    } else {
-      const newRow = html.createExplorerRowItem(
-        "folder-icon",
-        file.name,
-        currentDir + file.name + path.sep
-      );
-      newRow.addEventListener("dblclick", () => {
-        currentDir = newRow.id;
-        refreshExplorer();
-      });
-    }
-  });
+  try {
+    fileProvider.getFilesByDirectory(currentDir, (files) => {
+      for (const file of files) {
+        const filePath = currentDir + file.name
+        if (fileProvider.isFile(filePath)) {
+          const newRow = html.createExplorerRowItem(
+            "file-icon", 
+            file.name,
+            filePath
+          )
+          newRow.addEventListener("dblclick", () => {
+            shell.openPath(newRow.id)
+          })
+        } else {
+          const newRow = html.createExplorerRowItem(
+            "folder-icon",
+            file.name,
+            filePath + path.sep
+          )
+          newRow.addEventListener("dblclick", () => {
+            currentDir = newRow.id
+            refreshExplorer()
+          })
+        }
+      }
+    });
+  } catch (error) {
+    console.log("failed to get files cause: " + error);
+  }
 }
 
 function getParentFilePath() {
