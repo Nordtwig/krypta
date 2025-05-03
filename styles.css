@@ -11,6 +11,20 @@ p {
     height: 25px;
     width: 100%;
     app-region: drag;
+    display: flex;
+    justify-content: space-between;
+}
+
+#topbar-logo {
+    align-self: flex-start;
+    height: 100%;
+}
+
+#topbar-close {
+    align-self: flex-end;
+    height: 100%;
+    cursor: pointer;
+    app-region: no-drag;
 }
 
 #explorer {

@@ -22,6 +22,16 @@ pathElement.addEventListener("keydown", (event) => {
   }
 });
 
+const topbarCloseButton = document.getElementById("topbar-close")
+topbarCloseButton.addEventListener("click", (event) => {
+  function closeApp() {
+    const { ipcRenderer } = require("electron")
+    const ipc = ipcRenderer
+    ipc.send("close")
+  }
+  closeApp()
+})
+
 function refreshExplorer() {
   pathElement.textContent = currentDir;
   explorer.innerHTML = "";
