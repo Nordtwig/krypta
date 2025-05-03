@@ -1,3 +1,4 @@
+const { error } = require("console");
 const fs = require("fs");
 
 module.exports = {
@@ -14,7 +15,11 @@ module.exports = {
   },
 
   getFileStatsByPath: function(filePath) {
-	console.log(fs.statSync(filePath).isFile())
+	 fs.readFileSync(filePath, (error, data) => {
+		console.log("file read: ")
+		console.log(data)
+		callback(data)
+	 })
   },
 
   isFile: function(filePath) {
