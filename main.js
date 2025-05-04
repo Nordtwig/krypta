@@ -10,11 +10,20 @@ explorer = document.getElementById("explorer");
 
 let currentDir = osNavigator.homeDir;
 let isEditing = false
+let backElement
 
 const html = new HtmlGenerator();
 
 const pathElement = document.getElementById("path");
 pathElement.textContent = currentDir;
+
+pathElement.addEventListener("focus", (event) => {
+  isEditing = true
+})
+
+pathElement.addEventListener("blur", (event) => {
+  isEditing = false
+})
 
 pathElement.addEventListener("keydown", (event) => {
   if (event.code === "Enter") {
@@ -47,21 +56,25 @@ function refreshExplorer() {
 
   html.createExplorerHeadItem(["", "Name"]);
 
-  const backPath = getParentFilePath();
-  const backRow = html.createExplorerRowItem("folder-icon", "..", backPath)
-  backRow.className += "back-item"
-  backRow.addEventListener("dblclick", () => {
-    currentDir = backRow.id;
-    refreshExplorer();
-  });
+  backElement = null
+  if (!osNavigator.isRoot(currentDir)) {
+    const backPath = getParentFilePath();
+    const backRow = html.createExplorerRowItem("folder-icon", "..", backPath)
+    backElement = backRow
+    backRow.addEventListener("dblclick", () => {
+      currentDir = backRow.id;
+      refreshExplorer();
+    });
+  }
 
+  osNavigator.isRoot(currentDir)
   try {
     fileProvider.getFilesByDirectory(currentDir, (files) => {
       for (const file of files) {
         const filePath = currentDir + file.name
         if (fileProvider.isFile(filePath)) {
           const newRow = html.createExplorerRowItem(
-            "file-icon", 
+            "file-icon",
             file.name,
             filePath
           )
@@ -108,14 +121,17 @@ function updatePath() {
 
 function createFile() {
   const placeholderItem = html.createExplorerRowItem("file-icon", "", "")
-  placeholderItem.parentNode.insertBefore(placeholderItem, placeholderItem.parentNode.firstElementChild.nextElementSibling.nextElementSibling)
+  placeholderItem.parentNode.insertBefore(
+    placeholderItem, 
+    backElement ? backElement.nextElementSibling  : explorer.children[0].nextElementSibling
+  )
   const placeholderText = placeholderItem.getElementsByTagName('p')[0]
   placeholderText.addEventListener("keydown", (event) => {
-  if (event.code === "Enter") {
-    event.preventDefault()
-    placeholderText.blur()
-    isEditing = false
-  }
+    if (event.code === "Enter") {
+      event.preventDefault()
+      placeholderText.blur()
+      isEditing = false
+    }
   });
   placeholderText.contentEditable = true
   placeholderText.focus()
