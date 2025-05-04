@@ -9,6 +9,7 @@ fileContents = document.getElementById("fileContents");
 explorer = document.getElementById("explorer");
 
 let currentDir = osNavigator.homeDir;
+let isEditing = false
 
 const html = new HtmlGenerator();
 
@@ -21,6 +22,14 @@ pathElement.addEventListener("keydown", (event) => {
     updatePath();
   }
 });
+
+document.addEventListener("keyup", (event) => {
+  if (event.code === "KeyA" && !isEditing) {
+    event.preventDefault()
+    createFile()
+    isEditing = true
+  }
+})
 
 const topbarCloseButton = document.getElementById("topbar-close")
 topbarCloseButton.addEventListener("click", (event) => {
@@ -39,7 +48,8 @@ function refreshExplorer() {
   html.createExplorerHeadItem(["", "Name"]);
 
   const backPath = getParentFilePath();
-  const backRow = html.createExplorerRowItem("folder-icon", "..", backPath);
+  const backRow = html.createExplorerRowItem("folder-icon", "..", backPath)
+  backRow.className += "back-item"
   backRow.addEventListener("dblclick", () => {
     currentDir = backRow.id;
     refreshExplorer();
@@ -94,6 +104,21 @@ function updatePath() {
   }
   currentDir = newPath;
   refreshExplorer();
+}
+
+function createFile() {
+  const placeholderItem = html.createExplorerRowItem("file-icon", "", "")
+  placeholderItem.parentNode.insertBefore(placeholderItem, placeholderItem.parentNode.firstElementChild.nextElementSibling.nextElementSibling)
+  const placeholderText = placeholderItem.getElementsByTagName('p')[0]
+  placeholderText.addEventListener("keydown", (event) => {
+  if (event.code === "Enter") {
+    event.preventDefault()
+    placeholderText.blur()
+    isEditing = false
+  }
+  });
+  placeholderText.contentEditable = true
+  placeholderText.focus()
 }
 
 refreshExplorer();
