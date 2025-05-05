@@ -131,6 +131,7 @@ function createFile() {
       event.preventDefault()
       placeholderText.blur()
       isEditing = false
+      fileProvider.createObject(currentDir + path.sep, placeholderText.textContent, refreshExplorer)
     }
   });
   placeholderText.contentEditable = true
