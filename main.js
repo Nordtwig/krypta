@@ -11,6 +11,7 @@ explorer = document.getElementById("explorer");
 let currentDir = osNavigator.homeDir;
 let isEditing = false
 let backElement
+let draggingItem = null
 
 const html = new HtmlGenerator();
 
@@ -78,6 +79,8 @@ function refreshExplorer() {
             file.name,
             filePath
           )
+          newRow.className += "sortable-item"
+          newRow.draggable = true
           newRow.addEventListener("dblclick", () => {
             shell.openPath(newRow.id)
           })
@@ -87,6 +90,8 @@ function refreshExplorer() {
             file.name,
             filePath + path.sep
           )
+          newRow.className += "sortable-item"
+          newRow.draggable = true
           newRow.addEventListener("dblclick", () => {
             currentDir = newRow.id
             refreshExplorer()
@@ -136,6 +141,41 @@ function createFile() {
   });
   placeholderText.contentEditable = true
   placeholderText.focus()
+}
+
+explorer.addEventListener("dragstart", (event) => {
+  draggingItem = event.target
+  event.target.classList.add("dragging")
+})
+
+explorer.addEventListener("dragend", (event) => {
+  draggingItem = null
+  event.target.classList.add("dragging")
+})
+
+explorer.addEventListener("dragover", (event) => {
+  event.preventDefault()
+  const draggingOverItem = getDragAfterElement(explorer, event.clientY)
+
+  if (draggingOverItem) {
+    explorer.insertBefore(draggingItem, draggingOverItem)
+  } else {
+    explorer.appendChild(draggingItem)
+  }
+})
+
+function getDragAfterElement(container, y) {
+  const draggableElements = [...container.querySelectorAll(".sortable-item:not(.dragging")]
+
+  return draggableElements.reduce((closest, child) => {
+    const box = child.getBoundingClientRect()
+    const offset = y - box.top - box.height / 2
+    if (offset < 0  && offset > closest.offset) {
+      return { offset: offset, element: child}
+    } else {
+      return closest
+    }
+  }, { offset: Number.NEGATIVE_INFINITY }).element
 }
 
 refreshExplorer();
