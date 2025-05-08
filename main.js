@@ -151,6 +151,7 @@ explorer.addEventListener("dragstart", (event) => {
 explorer.addEventListener("dragend", (event) => {
   draggingItem = null
   event.target.classList.add("dragging")
+  console.log(event.target)
 })
 
 explorer.addEventListener("dragover", (event) => {
