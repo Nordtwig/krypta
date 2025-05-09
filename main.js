@@ -68,7 +68,6 @@ function refreshExplorer() {
     });
   }
 
-  osNavigator.isRoot(currentDir)
   try {
     fileProvider.getFilesByDirectory(currentDir, (files) => {
       for (const file of files) {
@@ -151,7 +150,8 @@ explorer.addEventListener("dragstart", (event) => {
 explorer.addEventListener("dragend", (event) => {
   draggingItem = null
   event.target.classList.add("dragging")
-  console.log(event.target)
+  currentDir = getDragAfterElement(explorer, event.clientY).id
+  refreshExplorer()
 })
 
 explorer.addEventListener("dragover", (event) => {
@@ -159,9 +159,9 @@ explorer.addEventListener("dragover", (event) => {
   const draggingOverItem = getDragAfterElement(explorer, event.clientY)
 
   if (draggingOverItem) {
-    explorer.insertBefore(draggingItem, draggingOverItem)
+    // explorer.insertBefore(draggingItem, draggingOverItem)
   } else {
-    explorer.appendChild(draggingItem)
+    // explorer.appendChild(draggingItem)
   }
 })
 
