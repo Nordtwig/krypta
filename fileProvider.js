@@ -40,5 +40,12 @@ module.exports = {
         callback()
       })
     }
+  },
+
+  moveObject: function moveObject(oldPath, newPath, callback) {
+    fs.rename(oldPath, newPath, (error) => {
+      if (error) console.log(error)
+
+    })
   }
 };

@@ -150,7 +150,9 @@ explorer.addEventListener("dragstart", (event) => {
 explorer.addEventListener("dragend", (event) => {
   draggingItem = null
   event.target.classList.add("dragging")
-  currentDir = getDragAfterElement(explorer, event.clientY).id
+  const draggedFile = path.basename(event.target.id)
+  const targetPath = getDragAfterElement(explorer, event.clientY).id
+  fileProvider.moveObject(event.target.id, targetPath + draggedFile)
   refreshExplorer()
 })
 
