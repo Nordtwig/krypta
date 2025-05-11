@@ -45,7 +45,9 @@ module.exports = {
   moveObject: function moveObject(oldPath, newPath, callback) {
     fs.rename(oldPath, newPath, (error) => {
       if (error) console.log(error)
-
+      console.log("file old path: " + oldPath)
+      console.log("new path: " + newPath)
+      callback()
     })
   }
 };
