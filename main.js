@@ -8,7 +8,8 @@ fileName = document.getElementById("fileName");
 fileContents = document.getElementById("fileContents");
 explorer = document.getElementById("explorer");
 
-let currentDir = osNavigator.homeDir;
+//let currentDir = osNavigator.homeDir;
+let currentDir = __dirname + path.sep
 let isEditing = false
 let backElement
 let draggingItem = null
@@ -62,6 +63,8 @@ function refreshExplorer() {
     const backPath = getParentFilePath();
     const backRow = html.createExplorerRowItem("folder-icon", "..", backPath)
     backElement = backRow
+    backElement.classList.add("sortable-item")
+    backElement.draggable = true
     backRow.addEventListener("dblclick", () => {
       currentDir = backRow.id;
       refreshExplorer();
