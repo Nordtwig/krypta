@@ -1,0 +1,25 @@
+{
+  "name": "krypta",
+  "version": "0.2.0",
+  "description": "A minimal, beautiful file explorer",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "electron": "^35.2.0",
+    "electron-vite": "^3.0.0",
+    "svelte": "^5.0.0",
+    "vite": "^6.0.0"
+  },
+  "allowScripts": {
+    "electron@35.7.5": true,
+    "esbuild@0.25.12": true
+  },
+  "dependencies": {
+    "lucide-svelte": "^1.0.1"
+  }
+}
