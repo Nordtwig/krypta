@@ -1,8 +1,22 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { readdir, stat, rename, mkdir, writeFile, rm } from 'fs/promises'
+import { readdir, stat, rename, mkdir, writeFile, rm, cp, readFile } from 'fs/promises'
 import { join, basename, dirname, sep } from 'path'
 import { homedir, platform } from 'os'
 import { shell } from 'electron'
+import { spawn } from 'child_process'
+
+const TRASH_DIR = join(homedir(), '.krypta-trash')
+const TRASH_FILES = join(TRASH_DIR, 'files')
+const TRASH_INFO  = join(TRASH_DIR, 'info')
+
+const CONFIG_DIR  = join(homedir(), '.config', 'krypta')
+const CONFIG_FILE = join(CONFIG_DIR, 'settings.json')
+const DEFAULT_SETTINGS = { useKryptaTrash: true, customCommands: [] }
+
+async function ensureTrashDirs() {
+  await mkdir(TRASH_FILES, { recursive: true })
+  await mkdir(TRASH_INFO,  { recursive: true })
+}
 
 contextBridge.exposeInMainWorld('krypta', {
   homeDir: homedir(),
@@ -59,21 +73,113 @@ contextBridge.exposeInMainWorld('krypta', {
     return { size: s.size, mtime: s.mtime }
   },
 
-  isRoot: (dirPath) => {
-    return dirname(dirPath) === dirPath
-  },
-
-  parentDir: (dirPath) => {
-    return dirname(dirPath)
-  },
-
+  isRoot: (dirPath) => dirname(dirPath) === dirPath,
+  parentDir: (dirPath) => dirname(dirPath),
   joinPath: (...parts) => join(...parts),
 
   move: (src, dest) => rename(src, dest),
+  copy: (src, dest) => cp(src, dest, { recursive: true }),
   createFile: (filePath) => writeFile(filePath, ''),
   createDir: (dirPath) => mkdir(dirPath),
   delete: (filePath, recursive = false) => rm(filePath, { recursive }),
   openFile: (filePath) => shell.openPath(filePath),
+
+  loadSettings: async () => {
+    try {
+      const content = await readFile(CONFIG_FILE, 'utf8')
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(content) }
+    } catch {
+      return { ...DEFAULT_SETTINGS }
+    }
+  },
+
+  saveSettings: async (settings) => {
+    await mkdir(CONFIG_DIR, { recursive: true })
+    await writeFile(CONFIG_FILE, JSON.stringify(settings, null, 2))
+  },
+
+  runCommand: (cmd) => {
+    spawn(cmd, { shell: true, detached: true, stdio: 'ignore' }).unref()
+  },
+
+  openTerminal: (dirPath) => {
+    if (process.env.TERMINAL) {
+      spawn(process.env.TERMINAL, [], { cwd: dirPath, detached: true, stdio: 'ignore' }).unref()
+      return
+    }
+    const candidates = [
+      ['wezterm', ['start', '--cwd', dirPath]],
+      ['alacritty', ['--working-directory', dirPath]],
+      ['kitty', ['--directory', dirPath]],
+      ['gnome-terminal', [`--working-directory=${dirPath}`]],
+      ['xfce4-terminal', [`--working-directory=${dirPath}`]],
+      ['konsole', ['--workdir', dirPath]],
+      ['xterm', ['-e', `cd '${dirPath}' && exec $SHELL`]],
+    ]
+    function tryNext(i) {
+      if (i >= candidates.length) return
+      const [cmd, args] = candidates[i]
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore' })
+      child.on('error', () => tryNext(i + 1))
+      child.unref()
+    }
+    tryNext(0)
+  },
+
+  // Krypta soft-delete: moves to ~/.krypta-trash/, returns a key for undo
+  kryptaTrash: async (filePath) => {
+    await ensureTrashDirs()
+    const name = basename(filePath)
+    const key = `${name}-${Date.now()}`
+    const dest = join(TRASH_FILES, key)
+    try {
+      await rename(filePath, dest)
+    } catch (e) {
+      if (e.code === 'EXDEV') {
+        await cp(filePath, dest, { recursive: true })
+        await rm(filePath, { recursive: true })
+      } else {
+        throw e
+      }
+    }
+    await writeFile(
+      join(TRASH_INFO, `${key}.json`),
+      JSON.stringify({ originalPath: filePath, trashedAt: Date.now() })
+    )
+    return key
+  },
+
+  // Restore a soft-deleted item back to its original path
+  kryptaRestore: async (key) => {
+    const infoPath = join(TRASH_INFO, `${key}.json`)
+    const { originalPath } = JSON.parse(await readFile(infoPath, 'utf8'))
+    await mkdir(dirname(originalPath), { recursive: true })
+    try {
+      await rename(join(TRASH_FILES, key), originalPath)
+    } catch (e) {
+      if (e.code === 'EXDEV') {
+        await cp(join(TRASH_FILES, key), originalPath, { recursive: true })
+        await rm(join(TRASH_FILES, key), { recursive: true })
+      } else {
+        throw e
+      }
+    }
+    await rm(infoPath)
+  },
+
+  // Move all remaining krypta trash items to OS trash (called on exit and startup)
+  flushKryptaTrash: async () => {
+    try {
+      await ensureTrashDirs()
+      const keys = await readdir(TRASH_FILES)
+      await Promise.all(keys.map(async key => {
+        try {
+          await shell.trashItem(join(TRASH_FILES, key))
+          await rm(join(TRASH_INFO, `${key}.json`)).catch(() => {})
+        } catch {}
+      }))
+    } catch {}
+  },
 
   window: {
     close: () => ipcRenderer.send('close-window'),

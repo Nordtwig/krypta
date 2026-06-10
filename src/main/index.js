@@ -1,5 +1,24 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
+import { readdir, rm, mkdir } from 'fs/promises'
+import { homedir } from 'os'
+
+const TRASH_FILES = join(homedir(), '.krypta-trash', 'files')
+const TRASH_INFO  = join(homedir(), '.krypta-trash', 'info')
+
+async function flushKryptaTrash() {
+  try {
+    await mkdir(TRASH_FILES, { recursive: true })
+    await mkdir(TRASH_INFO,  { recursive: true })
+    const keys = await readdir(TRASH_FILES)
+    await Promise.all(keys.map(async key => {
+      try {
+        await shell.trashItem(join(TRASH_FILES, key))
+        await rm(join(TRASH_INFO, `${key}.json`)).catch(() => {})
+      } catch {}
+    }))
+  } catch {}
+}
 
 let win
 
@@ -30,10 +49,22 @@ function createWindow() {
 }
 
 app.disableHardwareAcceleration()
-app.on('ready', createWindow)
+
+app.on('ready', async () => {
+  await flushKryptaTrash()  // sweep any leftovers from a previous crash
+  createWindow()
+})
+
+app.on('before-quit', async (e) => {
+  e.preventDefault()
+  await flushKryptaTrash()
+  app.exit(0)
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
