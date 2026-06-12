@@ -1,17 +1,21 @@
 <script>
   import { onMount } from 'svelte'
 
-  let { items, x, y, onClose } = $props()
+  let { items, x, y, onClose, anchorRight = false } = $props()
 
   let menuEl = $state(null)
   let activeIndex = $state(-1)
-  let ax = $state(x)
-  let ay = $state(y)
+  let ax = $state(0)
+  let ay = $state(0)
+  let visible = $state(false)
 
   onMount(() => {
     const rect = menuEl.getBoundingClientRect()
-    ax = x + rect.width  > window.innerWidth  - 4 ? x - rect.width  : x
+    ax = anchorRight
+      ? Math.max(4, x - rect.width)
+      : (x + rect.width > window.innerWidth - 4 ? x - rect.width : x)
     ay = y + rect.height > window.innerHeight - 4 ? y - rect.height : y
+    visible = true
 
     function onMouseDown(e) {
       if (!menuEl?.contains(e.target)) onClose()
@@ -52,7 +56,7 @@
 <div
   class="context-menu"
   bind:this={menuEl}
-  style="left:{ax}px; top:{ay}px"
+  style="left:{ax}px; top:{ay}px; visibility:{visible ? 'visible' : 'hidden'}"
   oncontextmenu={(e) => e.preventDefault()}
 >
   {#each items as item, i}

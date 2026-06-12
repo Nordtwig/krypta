@@ -1,7 +1,20 @@
 <script>
-  import { Trash2, Terminal, SlidersHorizontal, Keyboard, Plus, ChevronRight } from 'lucide-svelte'
+  import { Trash2, Terminal, SlidersHorizontal, Keyboard, Plus, ChevronRight, ChevronLeft, GripVertical, RotateCcw, X } from 'lucide-svelte'
 
-  let { focused = false, onFocus, onAddPane, settings, onSettingsChange } = $props()
+  const DEFAULTS = {
+    useKryptaTrash:    true,
+    springLoad:        true,
+    springLoadDelay:   800,
+    autoHideColumns:   true,
+    showCreateBtn:     true,
+    showHidden:        false,
+    restoreSession:    true,
+    autoExpandPanes:   true,
+  }
+
+  let { focused = false, onFocus, onAddPane, onClose, onCollapse, settings, onSettingsChange, paneIndex = 0, onPaneDrop, flexValue = 1, grace = false } = $props()
+  let paneDragOver = $state(false)
+  let isDraggingThisPane = $state(false)
 
   let section = $state('root')
   let selectedIndex = $state(0)
@@ -70,7 +83,7 @@
   let rows = $derived.by(() => {
     if (section === 'root') return rootSections
     if (section === 'trash') return [
-      { type: 'toggle', id: 'useKryptaTrash', label: 'Krypta trash buffer', value: settings.useKryptaTrash },
+      { type: 'toggle', id: 'useKryptaTrash', label: 'Krypta trash buffer', value: settings.useKryptaTrash, default: DEFAULTS.useKryptaTrash },
       { type: 'action', id: 'flush',          label: 'Flush buffer to OS trash' },
     ]
     if (section === 'commands') return [
@@ -79,7 +92,13 @@
     ]
     if (section === 'hotkeys') return hotkeyRows
     if (section === 'general') return [
-      { type: 'info', label: 'More options coming soon' },
+      { type: 'toggle', id: 'springLoad', label: 'Spring-load folders', value: settings.springLoad !== false, default: DEFAULTS.springLoad },
+      { type: 'range',  id: 'springLoadDelay', label: 'Spring-load delay', value: settings.springLoadDelay ?? DEFAULTS.springLoadDelay, min: 200, max: 2000, step: 50, disabled: settings.springLoad === false, default: DEFAULTS.springLoadDelay },
+      { type: 'toggle', id: 'autoHideColumns', label: 'Auto-hide narrow columns', value: settings.autoHideColumns !== false, default: DEFAULTS.autoHideColumns },
+      { type: 'toggle', id: 'showCreateBtn',   label: 'Quick-create button',       value: settings.showCreateBtn !== false,  default: DEFAULTS.showCreateBtn },
+      { type: 'toggle', id: 'showHidden',      label: 'Show hidden files',          value: settings.showHidden === true,      default: DEFAULTS.showHidden },
+      { type: 'toggle', id: 'restoreSession',  label: 'Restore session on launch',  value: settings.restoreSession !== false,  default: DEFAULTS.restoreSession },
+      { type: 'toggle', id: 'autoExpandPanes', label: 'Expand window for new panes', value: settings.autoExpandPanes !== false, default: DEFAULTS.autoExpandPanes },
     ]
     return []
   })
@@ -94,7 +113,7 @@
         selectedIndex = 0
         break
       case 'toggle':
-        onSettingsChange({ ...settings, [row.id]: !settings[row.id] })
+        onSettingsChange({ ...settings, [row.id]: !row.value })
         break
       case 'action':
         if (row.id === 'flush') window.krypta.flushKryptaTrash()
@@ -147,6 +166,14 @@
     editingIndex = null
   }
 
+  function handleRangeChange(id, value) {
+    onSettingsChange({ ...settings, [id]: value })
+  }
+
+  function resetToDefault(row) {
+    onSettingsChange({ ...settings, [row.id]: row.default })
+  }
+
   function deleteSelected() {
     const row = rows[selectedIndex]
     if (row?.type !== 'command') return
@@ -186,12 +213,12 @@
         e.preventDefault()
         let next = selectedIndex
         do { next++ } while (next < rows.length - 1 && isSkippable(rows[next]))
-        if (!isSkippable(rows[next])) selectedIndex = next
+        if (next < rows.length && !isSkippable(rows[next])) selectedIndex = next
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
         let next = selectedIndex
         do { next-- } while (next > 0 && isSkippable(rows[next]))
-        if (!isSkippable(rows[next])) selectedIndex = next
+        if (next >= 0 && !isSkippable(rows[next])) selectedIndex = next
       } else if (e.key === 'Enter' || e.key === 'ArrowRight') {
         e.preventDefault()
         activateRow(rows[selectedIndex])
@@ -213,8 +240,34 @@
   })
 </script>
 
-<div class="settings-pane" class:focused onmouseenter={onFocus}>
-  <div class="pathbar">
+<div
+  class="settings-pane"
+  class:focused
+  class:grace
+  onmouseenter={onFocus}
+  style="flex: {flexValue}"
+  ondragover={(e) => {
+    if (!isDraggingThisPane && e.dataTransfer.types.includes('application/krypta-pane')) {
+      e.preventDefault()
+      paneDragOver = true
+    }
+  }}
+  ondragleave={(e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) paneDragOver = false
+  }}
+  ondrop={(e) => {
+    if (!e.dataTransfer.types.includes('application/krypta-pane')) return
+    e.preventDefault()
+    paneDragOver = false
+    const fromIndex = parseInt(e.dataTransfer.getData('application/krypta-pane'))
+    if (!isNaN(fromIndex) && fromIndex !== paneIndex) onPaneDrop?.(fromIndex, paneIndex)
+  }}
+>
+  <div
+    class="pathbar"
+    class:pane-drag-over={paneDragOver}
+  >
+    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
     {#if sectionLabel}
       <button class="crumb" onclick={() => { section = 'root'; selectedIndex = 0 }}>Settings</button>
       <span class="sep">›</span>
@@ -222,7 +275,14 @@
     {:else}
       <span class="crumb-current">Settings</span>
     {/if}
+    <div class="pane-actions">
+      <button class="pane-action-btn" onclick={onAddPane} title="New pane">+</button>
+      <span class="pane-actions-sep"></span>
+      <button class="pane-action-btn close" onclick={onClose} title="Close pane"><X size={10} strokeWidth={2.5} /></button>
+    </div>
   </div>
+
+  <div class="column-spacer">{sectionLabel ?? 'All'}</div>
 
   <div class="row-list">
     {#each rows as row, i}
@@ -231,6 +291,7 @@
           class="row"
           class:selected={i === selectedIndex}
           onclick={() => { selectedIndex = i; activateRow(row) }}
+          onmouseenter={() => selectedIndex = i}
         >
           <span class="cell-icon"><svelte:component this={row.icon} size={14} color="var(--pink)" strokeWidth={1.5} /></span>
           <span class="cell-label">{row.label}</span>
@@ -242,10 +303,18 @@
           class="row"
           class:selected={i === selectedIndex}
           onclick={() => { selectedIndex = i; activateRow(row) }}
+          onmouseenter={() => selectedIndex = i}
         >
           <span class="cell-icon"></span>
           <span class="cell-label">{row.label}</span>
-          <span class="cell-right value" class:on={row.value}>{row.value ? 'on' : 'off'}</span>
+          <span class="cell-right value" class:on={row.value}>
+            {row.value ? 'on' : 'off'}
+            {#if row.default !== undefined && row.value !== row.default}
+              <button class="reset-btn" onclick={(e) => { e.stopPropagation(); resetToDefault(row) }} title="Reset to default">
+                <RotateCcw size={9} color="currentColor" strokeWidth={2.5} />
+              </button>
+            {/if}
+          </span>
         </div>
 
       {:else if row.type === 'action'}
@@ -253,6 +322,7 @@
           class="row"
           class:selected={i === selectedIndex}
           onclick={() => { selectedIndex = i; activateRow(row) }}
+          onmouseenter={() => selectedIndex = i}
         >
           <span class="cell-icon"></span>
           <span class="cell-label">{row.label}</span>
@@ -289,6 +359,7 @@
             class:selected={i === selectedIndex}
             onclick={() => { selectedIndex = i }}
             ondblclick={() => startEdit(row.index)}
+            onmouseenter={() => selectedIndex = i}
           >
             <span class="cell-icon"><Terminal size={13} color="var(--text-dim)" strokeWidth={1.5} /></span>
             <span class="cell-label">{row.label}</span>
@@ -301,6 +372,7 @@
           class="row dim"
           class:selected={i === selectedIndex}
           onclick={() => { selectedIndex = i; activateRow(row) }}
+          onmouseenter={() => selectedIndex = i}
         >
           <span class="cell-icon"><Plus size={13} color="var(--text-dim)" strokeWidth={1.5} /></span>
           <span class="cell-label">New command</span>
@@ -322,11 +394,55 @@
           <span class="cell-icon"></span>
           <span class="cell-label">{row.label}</span>
         </div>
+
+      {:else if row.type === 'range'}
+        <div
+          class="row range-row"
+          class:selected={i === selectedIndex}
+          class:disabled={row.disabled}
+          onclick={() => selectedIndex = i}
+          onmouseenter={() => selectedIndex = i}
+        >
+          <span class="cell-icon"></span>
+          <span class="cell-label">{row.label}</span>
+          <div class="range-control" onclick={(e) => e.stopPropagation()}>
+            <input
+              type="range"
+              min={row.min}
+              max={row.max}
+              step={row.step}
+              value={row.value}
+              disabled={row.disabled}
+              oninput={(e) => handleRangeChange(row.id, parseInt(e.currentTarget.value))}
+            />
+            <span class="range-value">{row.value}ms</span>
+            {#if row.default !== undefined && row.value !== row.default}
+              <button class="reset-btn" onclick={(e) => { e.stopPropagation(); resetToDefault(row) }} title="Reset to default">
+                <RotateCcw size={9} color="currentColor" strokeWidth={2.5} />
+              </button>
+            {/if}
+          </div>
+        </div>
       {/if}
     {/each}
   </div>
 
-  <button class="add-pane-btn" onclick={onAddPane} title="Open new pane">+</button>
+  <div class="pane-footer">
+    <div
+      class="pane-handle"
+      draggable="true"
+      ondragstart={(e) => {
+        e.stopPropagation()
+        isDraggingThisPane = true
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('application/krypta-pane', String(paneIndex))
+      }}
+      ondragend={() => { isDraggingThisPane = false }}
+    >
+      <GripVertical size={10} strokeWidth={2} />
+    </div>
+  </div>
+
 </div>
 
 <style>
@@ -345,7 +461,7 @@
     align-items: center;
     gap: 4px;
     padding: 0 12px;
-    height: 34px;
+    height: 32px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     font-size: 11px;
@@ -355,6 +471,58 @@
   .settings-pane.focused .pathbar {
     border-bottom-color: rgba(212, 96, 110, 0.5);
   }
+
+  .pathbar.pane-drag-over {
+    background: rgba(80, 200, 120, 0.08);
+    border-bottom-color: rgba(80, 200, 120, 0.5);
+  }
+
+  .pane-footer {
+    height: 20px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-top: 1px solid var(--border);
+  }
+
+  .pane-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    color: var(--text-dim);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .pane-handle:active { cursor: grabbing; }
+  .settings-pane:hover .pane-handle,
+  .settings-pane.focused .pane-handle { opacity: 0.2; }
+  .pane-handle:hover { opacity: 0.55; }
+
+  .pane-collapse-btn {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.1s;
+  }
+  .settings-pane:hover .pane-collapse-btn,
+  .settings-pane.focused .pane-collapse-btn { opacity: 0.15; }
+  .pathbar:hover .pane-collapse-btn { opacity: 0.35; }
+  .pane-collapse-btn:hover { opacity: 1 !important; color: var(--text); }
+
+  .settings-pane.grace .pane-actions,
+  .settings-pane.grace .pane-collapse-btn { pointer-events: none; }
 
   .crumb {
     background: none;
@@ -370,10 +538,25 @@
   .crumb-current { color: var(--text-dim); }
   .sep { opacity: 0.4; }
 
+  .column-spacer {
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-dim);
+    opacity: 0.6;
+    user-select: none;
+  }
+
   .row-list {
     flex: 1;
     overflow-y: auto;
-    padding: 4px 0;
+    padding: 0 0 2px;
   }
 
   .row {
@@ -398,6 +581,7 @@
     box-shadow: inset 3px 0 0 var(--emerald);
   }
 
+  .row:not(.non-interactive):hover { background: rgba(212, 96, 110, 0.07); }
   .row.dim { opacity: 0.5; }
   .row.non-interactive { cursor: default; }
 
@@ -463,15 +647,28 @@
   .edit-input.active { border-bottom-color: rgba(212, 96, 110, 0.6); }
   .edit-input::placeholder { color: var(--text-dim); opacity: 0.35; }
 
-  .add-pane-btn {
-    position: absolute;
-    bottom: 8px;
-    right: 10px;
-    width: 22px;
-    height: 22px;
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 3px;
+  .pane-actions {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .pane-actions-sep {
+    width: 1px;
+    height: 10px;
+    background: rgba(255,255,255,0.12);
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .pane-action-btn {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
     color: var(--text-dim);
     font-size: 14px;
     line-height: 1;
@@ -480,12 +677,19 @@
     align-items: center;
     justify-content: center;
     opacity: 0;
-    transition: opacity 0.1s;
+    transition: opacity 0.15s, color 0.1s;
   }
 
-  .settings-pane:hover .add-pane-btn,
-  .settings-pane.focused .add-pane-btn { opacity: 1; }
-  .add-pane-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .settings-pane:hover .pane-action-btn,
+  .settings-pane:hover .pane-actions-sep,
+  .settings-pane.focused .pane-action-btn,
+  .settings-pane.focused .pane-actions-sep { opacity: 0.15; }
+
+  .pathbar:hover .pane-action-btn,
+  .pathbar:hover .pane-actions-sep { opacity: 0.35; }
+
+  .pane-action-btn:hover { opacity: 1 !important; color: var(--text); }
+  .pane-action-btn.close:hover { color: var(--pink); }
 
   .row-group-header {
     padding: 12px 12px 4px 28px;
@@ -512,6 +716,48 @@
     font-size: 12px;
     color: var(--text-dim);
   }
+
+  .reset-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text-dim);
+    opacity: 0.45;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    transition: opacity 0.1s, color 0.1s;
+  }
+  .reset-btn:hover { opacity: 1; color: var(--pink); }
+
+  .range-row { height: 32px; }
+
+  .range-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 4px;
+  }
+
+  .range-control input[type="range"] {
+    width: 80px;
+    accent-color: var(--emerald);
+    cursor: pointer;
+  }
+
+  .range-value {
+    font-size: 10px;
+    color: var(--text-dim);
+    opacity: 0.7;
+    min-width: 36px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .row.disabled .cell-label,
+  .row.disabled .range-value { opacity: 0.35; }
+  .row.disabled .range-control input { cursor: not-allowed; opacity: 0.35; }
 
   kbd {
     font-family: monospace;

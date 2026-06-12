@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, screen } from 'electron'
 import { join } from 'path'
 import { readdir, rm, mkdir } from 'fs/promises'
 import { homedir } from 'os'
@@ -24,10 +24,10 @@ let win
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1100,
-    height: 700,
-    minWidth: 600,
-    minHeight: 400,
+    width: 450,
+    height: 520,
+    minWidth: 200,
+    minHeight: 100,
     titleBarStyle: 'hidden',
     backgroundColor: '#091925',
     webPreferences: {
@@ -44,7 +44,17 @@ function createWindow() {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  win.webContents.openDevTools()
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return
+      const isDevTools = input.key === 'F12' ||
+        (input.key === 'I' && input.control && input.shift)
+      if (isDevTools) {
+        win.webContents.toggleDevTools()
+        event.preventDefault()
+      }
+    })
+  }
   win.on('closed', () => { win = null })
 }
 
@@ -72,3 +82,14 @@ app.on('activate', () => {
 ipcMain.on('close-window', () => win?.close())
 ipcMain.on('minimize-window', () => win?.minimize())
 ipcMain.on('maximize-window', () => win?.isMaximized() ? win.unmaximize() : win.maximize())
+
+ipcMain.handle('get-window-bounds', () => {
+  if (!win) return null
+  const { x, y, width, height } = win.getBounds()
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  return { x, y, width, height, workAreaX: workArea.x, workAreaY: workArea.y, workAreaWidth: workArea.width, workAreaHeight: workArea.height }
+})
+
+ipcMain.handle('set-window-bounds', (_, { x, y, width, height }) => {
+  win?.setBounds({ x, y, width, height })
+})

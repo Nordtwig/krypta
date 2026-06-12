@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { readdir, stat, rename, mkdir, writeFile, rm, cp, readFile } from 'fs/promises'
+import { writeFileSync, mkdirSync } from 'fs'
 import { join, basename, dirname, sep } from 'path'
 import { homedir, platform } from 'os'
 import { shell } from 'electron'
@@ -9,8 +10,9 @@ const TRASH_DIR = join(homedir(), '.krypta-trash')
 const TRASH_FILES = join(TRASH_DIR, 'files')
 const TRASH_INFO  = join(TRASH_DIR, 'info')
 
-const CONFIG_DIR  = join(homedir(), '.config', 'krypta')
-const CONFIG_FILE = join(CONFIG_DIR, 'settings.json')
+const CONFIG_DIR    = join(homedir(), '.config', 'krypta')
+const CONFIG_FILE   = join(CONFIG_DIR, 'settings.json')
+const SESSION_FILE  = join(CONFIG_DIR, 'session.json')
 const DEFAULT_SETTINGS = { useKryptaTrash: true, customCommands: [] }
 
 async function ensureTrashDirs() {
@@ -23,10 +25,10 @@ contextBridge.exposeInMainWorld('krypta', {
   sep,
   platform: platform(),
 
-  readDir: async (dirPath) => {
+  readDir: async (dirPath, { showHidden = false } = {}) => {
     const entries = await readdir(dirPath, { withFileTypes: true })
     const filtered = entries
-      .filter(e => !e.name.startsWith('.'))
+      .filter(e => showHidden || !e.name.startsWith('.'))
       .sort((a, b) => {
         if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
         return a.name.localeCompare(b.name)
@@ -42,7 +44,7 @@ contextBridge.exposeInMainWorld('krypta', {
       if (e.isDirectory()) {
         try {
           const children = await readdir(join(dirPath, e.name))
-          itemCount = children.filter(n => !n.startsWith('.')).length
+          itemCount = children.filter(n => showHidden || !n.startsWith('.')).length
         } catch {}
       }
       return { name: e.name, isDirectory: e.isDirectory(), size, mtime, itemCount }
@@ -93,9 +95,27 @@ contextBridge.exposeInMainWorld('krypta', {
     }
   },
 
-  saveSettings: async (settings) => {
-    await mkdir(CONFIG_DIR, { recursive: true })
-    await writeFile(CONFIG_FILE, JSON.stringify(settings, null, 2))
+  saveSettings: (settings) => {
+    try {
+      mkdirSync(CONFIG_DIR, { recursive: true })
+      writeFileSync(CONFIG_FILE, JSON.stringify(settings, null, 2))
+    } catch {}
+  },
+
+  loadSession: async () => {
+    try {
+      const content = await readFile(SESSION_FILE, 'utf8')
+      return JSON.parse(content)
+    } catch {
+      return null
+    }
+  },
+
+  saveSession: (data) => {
+    try {
+      mkdirSync(CONFIG_DIR, { recursive: true })
+      writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2))
+    } catch {}
   },
 
   runCommand: (cmd) => {
@@ -184,6 +204,8 @@ contextBridge.exposeInMainWorld('krypta', {
   window: {
     close: () => ipcRenderer.send('close-window'),
     minimize: () => ipcRenderer.send('minimize-window'),
-    maximize: () => ipcRenderer.send('maximize-window')
+    maximize: () => ipcRenderer.send('maximize-window'),
+    getBounds: () => ipcRenderer.invoke('get-window-bounds'),
+    setBounds: (bounds) => ipcRenderer.invoke('set-window-bounds', bounds),
   }
 })

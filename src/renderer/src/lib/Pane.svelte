@@ -1,5 +1,5 @@
 <script>
-  import { Folder, File } from 'lucide-svelte'
+  import { Folder, File, GripVertical, X, ChevronLeft } from 'lucide-svelte'
   import SmartBar from './SmartBar.svelte'
   import ContextMenu from './ContextMenu.svelte'
 
@@ -19,7 +19,18 @@
     onToggleMoveMode,
     onMoveDirection,
     onHistory,
-    settings = null
+    settings = null,
+    paneIndex = 0,
+    fileDragState = null,
+    onFileDragStart,
+    onFileDragEnd,
+    onFileDrop,
+    onPaneDrop,
+    onClose,
+    onCollapse,
+    onError,
+    flexValue = 1,
+    grace = false,
   } = $props()
 
   let files = $state([])
@@ -52,6 +63,9 @@
   let expandedDates = $state(new Set())
   let pendingSelectName = $state(null)
   let fileListEl = $state(null)
+  let loadError = $state(null)
+  let breadcrumbsEl = $state(null)
+  let breadcrumbScrollTimer = null
   let sizeColWidth = $state(90)
   let dateColBaseWidth = $state(110)
   let dateColWidth = $derived.by(() => {
@@ -60,7 +74,40 @@
     return Math.max(dateColBaseWidth, maxChars * 7 + 16)
   })
   let resizing = $state(false)
-  let gridCols = $derived(`22px 1fr ${sizeColWidth}px ${dateColWidth}px`)
+  let gridCols = $derived.by(() => {
+    const shrink = settings?.autoHideColumns === false
+    const sizePart = !showSizeCol ? null : shrink ? `minmax(50px, ${sizeColWidth}px)` : `${sizeColWidth}px`
+    const datePart = !showDateCol ? null : shrink ? `minmax(60px, ${dateColWidth}px)` : `${dateColWidth}px`
+    return ['22px', '1fr', sizePart, datePart].filter(Boolean).join(' ')
+  })
+  let paneEl = $state(null)
+  let paneWidth = $state(0)
+
+  $effect(() => {
+    if (!paneEl) return
+    const ro = new ResizeObserver(entries => { paneWidth = entries[0].contentRect.width })
+    ro.observe(paneEl)
+    return () => ro.disconnect()
+  })
+
+  let showSizeCol = $derived(
+    settings?.autoHideColumns === false || paneWidth === 0 || paneWidth >= 260
+  )
+  let showDateCol = $derived(
+    settings?.autoHideColumns === false || paneWidth === 0 || paneWidth >= 380
+  )
+
+  let dropTargetFolder = $state(null)
+  let dropOverList = $state(false)
+  let dropInsertIndex = $state(null)
+  let dropCrumb = $state(null)
+  let crumbHoverTimer = null
+  let folderHoverTimer = null
+  let paneDragOver = $state(false)
+  let isDraggingThisPane = $state(false)
+  let draggingNames = $derived(
+    fileDragState?.sourceDir === currentDir ? fileDragState.names : new Set()
+  )
 
   let smartBarFilter = $derived(() => {
     if (!showSmartBar) return ''
@@ -124,6 +171,11 @@
 
   let breadcrumbs = $derived(getBreadcrumbs(currentDir))
 
+  $effect(() => {
+    currentDir
+    if (breadcrumbsEl) breadcrumbsEl.scrollLeft = breadcrumbsEl.scrollWidth
+  })
+
   function getBreadcrumbs(dir) {
     const parts = dir.split('/').filter(Boolean)
     return [
@@ -137,12 +189,14 @@
 
   $effect(() => {
     refreshKey
+    settings?.showHidden
     loadFiles(currentDir)
   })
 
   async function loadFiles(dir) {
     try {
-      files = await window.krypta.readDir(dir)
+      files = await window.krypta.readDir(dir, { showHidden: settings?.showHidden === true })
+      loadError = null
       if (pendingSelectName) {
         const idx = files.findIndex(f => f.name === pendingSelectName)
         selectedIndex = idx >= 0 ? idx : 0
@@ -154,8 +208,9 @@
       expandedDates = new Set()
       selectedNames = new Set()
       pendingDeleteNames = new Set()
-    } catch {
+    } catch (err) {
       files = []
+      loadError = errorReason(err)
     }
   }
 
@@ -439,11 +494,15 @@
   }
 
   async function trashNames(names) {
-    const keys = await Promise.all(
-      names.map(n => window.krypta.kryptaTrash(window.krypta.joinPath(currentDir, n)))
-    )
-    onHistory?.({ type: 'trash', dir: currentDir, names, keys })
-    onChanged?.(currentDir)
+    try {
+      const keys = await Promise.all(
+        names.map(n => window.krypta.kryptaTrash(window.krypta.joinPath(currentDir, n)))
+      )
+      onHistory?.({ type: 'trash', dir: currentDir, names, keys })
+      onChanged?.(currentDir)
+    } catch (err) {
+      onError?.(`${names.length === 1 ? `Couldn't trash "${names[0]}"` : `Couldn't trash ${names.length} items`} — ${errorReason(err)}`)
+    }
   }
 
   function openContextMenu(e, entry) {
@@ -567,6 +626,18 @@
     expandedDates = next
   }
 
+  function errorReason(err) {
+    switch (err?.code) {
+      case 'EACCES':
+      case 'EPERM':      return 'permission denied'
+      case 'EEXIST':     return 'name already taken'
+      case 'ENOENT':     return 'file no longer exists'
+      case 'ENOTEMPTY':  return 'folder is not empty'
+      case 'EBUSY':      return 'file is in use'
+      default:           return err?.message ?? 'unknown error'
+    }
+  }
+
   function startCreate(type) {
     creatingType = type
     creatingName = ''
@@ -593,7 +664,9 @@
       pendingSelectName = name
       onHistory?.({ type: 'create', dir: currentDir, name, isDirectory: type === 'folder' })
       onChanged?.(currentDir)
-    } catch {}
+    } catch (err) {
+      onError?.(`Couldn't create ${type === 'folder' ? 'folder' : 'file'} "${name}" — ${errorReason(err)}`)
+    }
   }
 
   async function commitRename() {
@@ -610,7 +683,9 @@
       pendingSelectName = newName
       onHistory?.({ type: 'rename', dir: currentDir, oldName, newName })
       onChanged?.(currentDir)
-    } catch {}
+    } catch (err) {
+      onError?.(`Couldn't rename "${oldName}" — ${errorReason(err)}`)
+    }
   }
 
   function selectRange(from, to) {
@@ -641,7 +716,9 @@
       )
       onHistory?.({ type: 'trash', dir: currentDir, names, keys })
       onChanged?.(currentDir)
-    } catch {}
+    } catch (err) {
+      onError?.(`${names.length === 1 ? `Couldn't trash "${names[0]}"` : `Couldn't trash ${names.length} items`} — ${errorReason(err)}`)
+    }
   }
 
   function handleCreateKeydown(e) {
@@ -680,9 +757,10 @@
         onHistory?.({ type: 'copy', srcDir: sourceDir, destDir: currentDir, names: [...names] })
         onChanged?.(currentDir)
       }
-    } catch {}
+    } catch (err) {
+      onError?.(`${type === 'cut' ? 'Move' : 'Copy'} failed — ${errorReason(err)}`)
+    }
   }
-
 
   function setSort(col) {
     if (sortCol === col) {
@@ -691,6 +769,40 @@
       sortCol = col
       sortDir = 'asc'
     }
+  }
+
+  function openCreateMenu(e) {
+    if (contextMenu?.fromCreate) { contextMenu = null; return }
+    const rect = e.currentTarget.getBoundingClientRect()
+    contextMenu = {
+      fromCreate: true,
+      x: rect.right,
+      y: rect.top,
+      anchorRight: true,
+      items: [
+        { label: 'New File',   shortcut: 'n', action: () => startCreate('file') },
+        { label: 'New Folder', shortcut: 'N', action: () => startCreate('folder') },
+      ]
+    }
+  }
+
+  function handleBreadcrumbMouseMove(e) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const zone = 18
+    clearInterval(breadcrumbScrollTimer)
+    if (x < zone) {
+      const speed = Math.ceil((1 - x / zone) * 5)
+      breadcrumbScrollTimer = setInterval(() => { breadcrumbsEl.scrollLeft -= speed }, 16)
+    } else if (x > rect.width - zone) {
+      const speed = Math.ceil((1 - (rect.width - x) / zone) * 5)
+      breadcrumbScrollTimer = setInterval(() => { breadcrumbsEl.scrollLeft += speed }, 16)
+    }
+  }
+
+  function handleBreadcrumbMouseLeave() {
+    clearInterval(breadcrumbScrollTimer)
+    breadcrumbScrollTimer = null
   }
 
   function startResize(e, col) {
@@ -716,8 +828,40 @@
   }
 </script>
 
-<div class="pane" class:focused class:resizing onmouseenter={onFocus} style="--grid-cols: {gridCols}">
-  <div class="pathbar" class:move-pending={moveMode} class:flashing={pathbarFlashing}>
+<div
+  class="pane"
+  class:focused
+  class:resizing
+  class:grace
+  bind:this={paneEl}
+  onmouseenter={onFocus}
+  style="flex: {flexValue}; --grid-cols: {gridCols}"
+  ondragover={(e) => {
+    if (e.dataTransfer.types.includes('application/krypta-files')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
+    } else if (!isDraggingThisPane && e.dataTransfer.types.includes('application/krypta-pane')) {
+      e.preventDefault()
+      paneDragOver = true
+    }
+  }}
+  ondragleave={(e) => {
+    if (!e.currentTarget.contains(e.relatedTarget)) paneDragOver = false
+  }}
+  ondrop={(e) => {
+    if (!e.dataTransfer.types.includes('application/krypta-pane')) return
+    e.preventDefault()
+    paneDragOver = false
+    const fromIndex = parseInt(e.dataTransfer.getData('application/krypta-pane'))
+    if (!isNaN(fromIndex) && fromIndex !== paneIndex) onPaneDrop?.(fromIndex, paneIndex)
+  }}
+>
+  <div
+    class="pathbar"
+    class:move-pending={moveMode}
+    class:flashing={pathbarFlashing}
+    class:pane-drag-over={paneDragOver}
+  >
     {#if moveMode}
       <span class="move-hint">carrying {moveMode.names.size === 1 ? [...moveMode.names][0] : moveMode.names.size + ' items'} — ←/→ to move, Esc to drop</span>
     {:else if showSmartBar}
@@ -731,11 +875,64 @@
         onTab={handleSmartBarTab}
       />
     {:else}
-      <div class="breadcrumbs">
+      <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
+      <div
+        class="breadcrumbs"
+        bind:this={breadcrumbsEl}
+        onmousemove={handleBreadcrumbMouseMove}
+        onmouseleave={handleBreadcrumbMouseLeave}
+      >
         {#each breadcrumbs as crumb, i}
           {#if i > 0}<span class="sep">›</span>{/if}
-          <button class="crumb" onclick={() => currentDir = crumb.path}>{crumb.name}</button>
+          {#if i < breadcrumbs.length - 1}
+            <button
+              class="crumb"
+              class:drop-target={dropCrumb === crumb.path}
+              onclick={() => currentDir = crumb.path}
+              ondragover={(e) => {
+                if (!e.dataTransfer.types.includes('application/krypta-files')) return
+                e.preventDefault()
+                e.stopPropagation()
+                e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
+                if (dropCrumb !== crumb.path) {
+                  dropCrumb = crumb.path
+                  clearTimeout(crumbHoverTimer)
+                  if (settings?.springLoad !== false) {
+                    crumbHoverTimer = setTimeout(() => {
+                      currentDir = crumb.path
+                      dropCrumb = null
+                    }, settings?.springLoadDelay ?? 800)
+                  }
+                }
+              }}
+              ondragleave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget)) {
+                  dropCrumb = null
+                  clearTimeout(crumbHoverTimer)
+                }
+              }}
+              ondrop={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                clearTimeout(crumbHoverTimer)
+                dropCrumb = null
+                if (!e.dataTransfer.types.includes('application/krypta-files')) return
+                const raw = e.dataTransfer.getData('application/krypta-files')
+                if (!raw) return
+                const { sourceDir } = JSON.parse(raw)
+                if (sourceDir === crumb.path) return
+                onFileDrop?.(crumb.path, e.ctrlKey)
+              }}
+            >{crumb.name}</button>
+          {:else}
+            <button class="crumb" onclick={() => currentDir = crumb.path}>{crumb.name}</button>
+          {/if}
         {/each}
+      </div>
+      <div class="pane-actions">
+        <button class="pane-action-btn" onclick={onAddPane} title="New pane">+</button>
+        <span class="pane-actions-sep"></span>
+        <button class="pane-action-btn close" onclick={onClose} title="Close pane"><X size={10} strokeWidth={2.5} /></button>
       </div>
     {/if}
   </div>
@@ -743,13 +940,62 @@
   <div class="file-header">
     <span class="col-icon"></span>
     <span class="col-name col-sort-btn" class:active={sortCol === 'name'} onclick={() => setSort('name')}>Name{#if sortCol === 'name'}<span class="sort-arrow">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</span>
-    <span class="col-size col-sort-btn" class:active={sortCol === 'size'} onclick={() => setSort('size')}>Size{#if sortCol === 'size'}<span class="sort-arrow">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</span>
-    <span class="col-date col-sort-btn" class:active={sortCol === 'date'} onclick={() => setSort('date')}>Modified{#if sortCol === 'date'}<span class="sort-arrow">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</span>
-    <div class="col-handle" style="right: {12 + dateColWidth + sizeColWidth - 4}px" onmousedown={(e) => startResize(e, 'size')}></div>
-    <div class="col-handle" style="right: {12 + dateColWidth - 4}px" onmousedown={(e) => startResize(e, 'date')}></div>
+    {#if showSizeCol}<span class="col-size col-sort-btn" class:active={sortCol === 'size'} onclick={() => setSort('size')}>Size{#if sortCol === 'size'}<span class="sort-arrow">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</span>{/if}
+    {#if showDateCol}<span class="col-date col-sort-btn" class:active={sortCol === 'date'} onclick={() => setSort('date')}>Modified{#if sortCol === 'date'}<span class="sort-arrow">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</span>{/if}
+    {#if showSizeCol}<div class="col-handle" style="right: {12 + (showDateCol ? dateColWidth : 0) + sizeColWidth - 4}px" onmousedown={(e) => startResize(e, 'size')}></div>{/if}
+    {#if showDateCol}<div class="col-handle" style="right: {12 + dateColWidth - 4}px" onmousedown={(e) => startResize(e, 'date')}></div>{/if}
+    {#if !showDateCol || !showSizeCol}
+      {@const hiddenCols = [!showDateCol && 'Modified', !showSizeCol && 'Size'].filter(Boolean)}
+      <div class="cols-hidden" title="{hiddenCols.join(', ')} hidden">+{hiddenCols.length}</div>
+    {/if}
   </div>
 
-  <div class="file-list" bind:this={fileListEl} oncontextmenu={(e) => openContextMenu(e, null)}>
+  <div
+    class="file-list"
+    class:drop-over={dropOverList && !dropTargetFolder}
+    bind:this={fileListEl}
+    oncontextmenu={(e) => openContextMenu(e, null)}
+    onclick={(e) => {
+      if (e.target === e.currentTarget) {
+        selectedIndex = -1
+        selectedNames = new Set()
+      }
+    }}
+    ondragover={(e) => {
+      if (!e.dataTransfer.types.includes('application/krypta-files')) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
+      if (!dropTargetFolder) dropOverList = true
+      if (e.target === e.currentTarget) dropInsertIndex = displayFiles.length
+    }}
+    ondragleave={(e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) {
+        dropOverList = false
+        dropTargetFolder = null
+        dropInsertIndex = null
+        clearTimeout(folderHoverTimer)
+      }
+    }}
+    ondrop={(e) => {
+      e.preventDefault()
+      clearTimeout(folderHoverTimer)
+      dropOverList = false
+      dropTargetFolder = null
+      dropInsertIndex = null
+      if (!e.dataTransfer.types.includes('application/krypta-files')) return
+      const raw = e.dataTransfer.getData('application/krypta-files')
+      if (!raw) return
+      const { sourceDir } = JSON.parse(raw)
+      if (sourceDir === currentDir) return
+      onFileDrop?.(currentDir, e.ctrlKey)
+    }}
+  >
+    {#if loadError}
+      <div class="list-notice error">{loadError}</div>
+    {:else if files.length === 0 && creatingType === null}
+      <div class="list-notice">empty folder</div>
+    {/if}
+
     {#if creatingType !== null}
       <div class="file-row creating">
         <span class="col-icon">
@@ -768,11 +1014,14 @@
             placeholder="name…"
           />
         </span>
-        <span class="col-size"></span>
-        <span class="col-date"></span>
+        {#if showSizeCol}<span class="col-size"></span>{/if}
+        {#if showDateCol}<span class="col-date"></span>{/if}
       </div>
     {/if}
     {#each displayFiles as entry, i}
+      {#if dropInsertIndex === i && dropOverList && !dropTargetFolder}
+        <div class="drop-line"></div>
+      {/if}
       <div
         class="file-row"
         class:cursor={i === selectedIndex}
@@ -780,6 +1029,9 @@
         class:pending-delete={pendingDeleteNames.has(entry.name)}
         class:cut={clipboard?.type === 'cut' && clipboard?.dir === currentDir && clipboard?.names?.has(entry.name)}
         class:carrying={moveMode?.dir === currentDir && moveMode?.names?.has(entry.name)}
+        class:dragging={draggingNames.has(entry.name)}
+        class:drop-target={dropTargetFolder === entry.name && entry.isDirectory}
+        draggable="true"
         oncontextmenu={(e) => openContextMenu(e, entry)}
         onclick={(e) => {
           pendingDeleteNames = new Set()
@@ -799,6 +1051,67 @@
           }
         }}
         ondblclick={() => navigate(entry)}
+        ondragstart={(e) => {
+          const names = selectedNames.has(entry.name)
+            ? new Set(selectedNames)
+            : new Set([entry.name])
+          e.dataTransfer.effectAllowed = 'copyMove'
+          e.dataTransfer.setData('application/krypta-files', JSON.stringify({
+            sourceDir: currentDir,
+            names: [...names]
+          }))
+          onFileDragStart?.(currentDir, names)
+        }}
+        ondragend={() => onFileDragEnd?.()}
+        ondragover={(e) => {
+          if (!e.dataTransfer.types.includes('application/krypta-files')) return
+          if (entry.isDirectory) {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
+            if (dropTargetFolder !== entry.name) {
+              dropTargetFolder = entry.name
+              dropOverList = false
+              dropInsertIndex = null
+              clearTimeout(folderHoverTimer)
+              if (settings?.springLoad !== false) {
+                const navTo = window.krypta.joinPath(currentDir, entry.name)
+                folderHoverTimer = setTimeout(() => {
+                  currentDir = navTo
+                  dropTargetFolder = null
+                }, settings?.springLoadDelay ?? 800)
+              }
+            }
+          } else {
+            if (dropTargetFolder) {
+              dropTargetFolder = null
+              clearTimeout(folderHoverTimer)
+            }
+            const rect = e.currentTarget.getBoundingClientRect()
+            dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? i : i + 1
+          }
+        }}
+        ondragleave={(e) => {
+          if (dropTargetFolder === entry.name && !e.currentTarget.contains(e.relatedTarget)) {
+            dropTargetFolder = null
+            clearTimeout(folderHoverTimer)
+          }
+        }}
+        ondrop={(e) => {
+          if (!entry.isDirectory) return
+          e.preventDefault()
+          e.stopPropagation()
+          clearTimeout(folderHoverTimer)
+          dropTargetFolder = null
+          dropOverList = false
+          dropInsertIndex = null
+          if (!e.dataTransfer.types.includes('application/krypta-files')) return
+          const raw = e.dataTransfer.getData('application/krypta-files')
+          if (!raw) return
+          const { sourceDir } = JSON.parse(raw)
+          const targetDir = window.krypta.joinPath(currentDir, entry.name)
+          if (sourceDir === targetDir) return
+          onFileDrop?.(targetDir, e.ctrlKey)
+        }}
       >
         <span class="col-icon">
           {#if entry.isDirectory}
@@ -819,39 +1132,72 @@
             {entry.name}
           {/if}
         </span>
-        {#if entry.isDirectory}
-          <span
-            class="col-size dir-size"
-            title="Click to calculate total size"
-            onclick={(e) => { e.stopPropagation(); loadDirSize(entry) }}
-          >{getDirSize(entry)}</span>
-        {:else}
-          <span class="col-size">{formatSize(entry.size, false)}</span>
+        {#if showSizeCol}
+          {#if entry.isDirectory}
+            <span
+              class="col-size dir-size"
+              title="Click to calculate total size"
+              onclick={(e) => { e.stopPropagation(); loadDirSize(entry) }}
+            >{getDirSize(entry)}</span>
+          {:else}
+            <span class="col-size">{formatSize(entry.size, false)}</span>
+          {/if}
         {/if}
-        <span
-          class="col-date"
-          class:expanded={expandedDates.has(entry.name)}
-          onclick={(e) => { e.stopPropagation(); toggleDate(entry.name) }}
-        >{formatDate(entry.mtime, expandedDates.has(entry.name))}</span>
+        {#if showDateCol}
+          <span
+            class="col-date"
+            class:expanded={expandedDates.has(entry.name)}
+            onclick={(e) => { e.stopPropagation(); toggleDate(entry.name) }}
+          >{formatDate(entry.mtime, expandedDates.has(entry.name))}</span>
+        {/if}
       </div>
     {/each}
+    {#if dropInsertIndex === displayFiles.length && dropOverList && !dropTargetFolder}
+      <div class="drop-line"></div>
+    {/if}
   </div>
 
-  <button class="add-pane-btn" onclick={onAddPane} title="Open new pane">+</button>
-</div>
+  {#if settings?.showCreateBtn !== false}
+    <button
+      class="create-btn"
+      class:open={!!contextMenu?.fromCreate}
+      onmousedown={(e) => { if (contextMenu?.fromCreate) e.stopPropagation() }}
+      onclick={openCreateMenu}
+      title={contextMenu?.fromCreate ? 'Close' : 'New file or folder'}
+    >{contextMenu?.fromCreate ? '×' : '+'}</button>
+  {/if}
 
-{#if contextMenu}
-  <ContextMenu
-    x={contextMenu.x}
-    y={contextMenu.y}
-    items={contextMenu.items}
-    onClose={() => contextMenu = null}
-  />
-{/if}
+  {#if contextMenu}
+    <ContextMenu
+      x={contextMenu.x}
+      y={contextMenu.y}
+      items={contextMenu.items}
+      anchorRight={contextMenu.anchorRight ?? false}
+      onClose={() => contextMenu = null}
+    />
+  {/if}
+
+  <div class="pane-footer">
+    <div
+      class="pane-handle"
+      draggable="true"
+      ondragstart={(e) => {
+        e.stopPropagation()
+        isDraggingThisPane = true
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('application/krypta-pane', String(paneIndex))
+      }}
+      ondragend={() => { isDraggingThisPane = false }}
+    >
+      <GripVertical size={10} strokeWidth={2} />
+    </div>
+  </div>
+</div>
 
 <style>
   .pane {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -899,8 +1245,12 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    overflow: hidden;
+    overflow-x: auto;
+    scrollbar-width: none;
+    min-width: 0;
   }
+
+  .breadcrumbs::-webkit-scrollbar { display: none; }
 
   .crumb {
     background: none;
@@ -916,6 +1266,11 @@
 
   .crumb:hover { color: var(--text); }
   .crumb:last-child { color: var(--text); }
+  .crumb.drop-target {
+    color: var(--emerald);
+    background: rgba(80, 200, 120, 0.12);
+    border-radius: 3px;
+  }
 
   .sep {
     color: var(--text-dim);
@@ -963,6 +1318,22 @@
   }
 
 
+  .cols-hidden {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 9px;
+    color: var(--text-dim);
+    opacity: 0.4;
+    letter-spacing: 0.05em;
+    cursor: default;
+    user-select: none;
+    transition: opacity 0.1s;
+  }
+
+  .cols-hidden:hover { opacity: 0.85; }
+
   .col-handle {
     position: absolute;
     top: 0;
@@ -990,7 +1361,21 @@
   .file-list {
     flex: 1;
     overflow-y: auto;
-    padding: 2px 0;
+    padding: 0 0 2px;
+  }
+
+  .list-notice {
+    padding: 24px 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.3;
+    text-align: center;
+    user-select: none;
+  }
+
+  .list-notice.error {
+    color: var(--pink);
+    opacity: 0.55;
   }
 
   .file-row {
@@ -1070,7 +1455,54 @@
     pointer-events: none;
   }
 
-  .add-pane-btn {
+  .pane-actions {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .pane-actions-sep {
+    width: 1px;
+    height: 10px;
+    background: rgba(255,255,255,0.12);
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .pane-action-btn {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.1s;
+  }
+
+  .pane:hover .pane-action-btn,
+  .pane:hover .pane-actions-sep,
+  .pane.focused .pane-action-btn,
+  .pane.focused .pane-actions-sep { opacity: 0.15; }
+
+  .pathbar:hover .pane-action-btn,
+  .pathbar:hover .pane-actions-sep { opacity: 0.35; }
+
+  .pane-action-btn:hover { opacity: 1 !important; color: var(--text); }
+  .pane-action-btn.close:hover { color: var(--pink); }
+
+  .pane.grace .pane-actions,
+  .pane.grace .pane-collapse-btn { pointer-events: none; }
+
+  .create-btn {
     position: absolute;
     bottom: 12px;
     right: 12px;
@@ -1090,9 +1522,10 @@
     transition: opacity 0.15s, background 0.15s;
   }
 
-  .pane:hover .add-pane-btn,
-  .pane.focused .add-pane-btn { opacity: 1; }
-  .add-pane-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .pane:hover .create-btn,
+  .pane.focused .create-btn { opacity: 1; }
+  .create-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .create-btn.open { opacity: 1; background: var(--bg-hover); color: var(--pink); border-color: rgba(212,96,110,0.3); }
 
   .file-row.cut {
     opacity: 0.35;
@@ -1143,5 +1576,75 @@
     width: 100%;
     padding: 0;
     caret-color: var(--pink);
+  }
+
+  .pane-footer {
+    height: 20px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-top: 1px solid var(--border);
+  }
+
+  .pane-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    color: var(--text-dim);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .pane-handle:active { cursor: grabbing; }
+  .pane:hover .pane-handle,
+  .pane.focused .pane-handle { opacity: 0.2; }
+  .pane-handle:hover { opacity: 0.55; }
+
+  .pane-collapse-btn {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.1s;
+  }
+  .pane:hover .pane-collapse-btn,
+  .pane.focused .pane-collapse-btn { opacity: 0.15; }
+  .pathbar:hover .pane-collapse-btn { opacity: 0.35; }
+  .pane-collapse-btn:hover { opacity: 1 !important; color: var(--text); }
+
+  .pathbar.pane-drag-over {
+    background: rgba(80, 200, 120, 0.08);
+    border-bottom-color: rgba(80, 200, 120, 0.5);
+  }
+
+  .file-row.dragging { opacity: 0.35; }
+
+  .file-row.drop-target {
+    background: rgba(80, 200, 120, 0.1) !important;
+    box-shadow: inset 2px 0 0 var(--emerald) !important;
+  }
+
+  .file-list.drop-over {
+    outline: 1px solid rgba(80, 200, 120, 0.25);
+    outline-offset: -2px;
+  }
+
+  .drop-line {
+    height: 2px;
+    background: var(--emerald);
+    margin: 0 12px;
+    border-radius: 1px;
+    pointer-events: none;
+    opacity: 0.7;
   }
 </style>
