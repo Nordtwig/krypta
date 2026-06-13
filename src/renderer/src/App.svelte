@@ -1,9 +1,10 @@
 <script>
   import { onMount } from 'svelte'
-  import { Folder, SlidersHorizontal, ChevronRight, GripVertical } from 'lucide-svelte'
+  import { Folder, Star, SlidersHorizontal, ChevronRight, GripVertical } from 'lucide-svelte'
   import Titlebar from './lib/Titlebar.svelte'
   import Pane from './lib/Pane.svelte'
   import SettingsPane from './lib/SettingsPane.svelte'
+  import CairnsPane from './lib/CairnsPane.svelte'
 
   const COMFORTABLE = 300
   const DEFAULT_WIDTH = 450
@@ -11,6 +12,8 @@
 
   let focusedPane = $state(0)
   let panes = $state([{ dir: window.krypta.homeDir, refreshKey: 0, flashKey: 0 }])
+  let closedPaneHistory = []
+  let restoringPane = false
   let paneFlexValues = $state([1])
   let mainEl = $state(null)
   let resizingPanes = $state(false)
@@ -34,6 +37,7 @@
         const restored = await Promise.all(session.panes.map(async (p) => {
           const collapseState = p.collapsed ? { collapsed: true, collapsedFlex: p.collapsedFlex, collapsedWidth: p.collapsedWidth } : {}
           if (p.type === 'settings') return { type: 'settings', ...collapseState }
+          if (p.type === 'cairns') return { type: 'cairns', ...collapseState }
           let dir = p.dir ?? window.krypta.homeDir
           try { await window.krypta.statPath(dir) } catch { dir = window.krypta.homeDir }
           return { dir, refreshKey: 0, flashKey: 0, ...collapseState }
@@ -53,7 +57,7 @@
     clearTimeout(saveTimer)
     if (settings?.restoreSession === false) return
     const snapshot = panes.map(p => {
-      const base = p.type === 'settings' ? { type: 'settings' } : { dir: p.dir }
+      const base = p.type === 'settings' ? { type: 'settings' } : p.type === 'cairns' ? { type: 'cairns' } : { dir: p.dir }
       return p.collapsed ? { ...base, collapsed: true, collapsedFlex: p.collapsedFlex, collapsedWidth: p.collapsedWidth } : base
     })
     const flexValues = [...paneFlexValues]
@@ -63,9 +67,13 @@
     }, 1000)
   })
 
+  function persistSettings(s) {
+    window.krypta.saveSettings(JSON.parse(JSON.stringify(s)))
+  }
+
   function handleSettingsChange(newSettings) {
     settings = newSettings
-    window.krypta.saveSettings(newSettings)
+    persistSettings(newSettings)
   }
 
   function insertPane(afterIndex, paneObj) {
@@ -81,6 +89,26 @@
     const existing = panes.findIndex(p => p.type === 'settings')
     if (existing >= 0) { focusedPane = existing; return }
     addPaneObject(focusedPane, { type: 'settings' })
+  }
+
+  function openCairns() {
+    const existing = panes.findIndex(p => p.type === 'cairns')
+    if (existing >= 0) { focusedPane = existing; return }
+    addPaneObject(focusedPane, { type: 'cairns' })
+  }
+
+  function handleToggleCairn(dir) {
+    const cairns = settings?.cairns ?? []
+    const newCairns = cairns.includes(dir) ? cairns.filter(c => c !== dir) : [...cairns, dir]
+    const newSettings = { ...settings, cairns: newCairns }
+    settings = newSettings
+    persistSettings(newSettings)
+  }
+
+  function handleRemoveCairn(dir) {
+    const newSettings = { ...settings, cairns: (settings?.cairns ?? []).filter(c => c !== dir) }
+    settings = newSettings
+    persistSettings(newSettings)
   }
 
   async function collapsePane(index) {
@@ -261,8 +289,37 @@
     await addPaneObject(afterIndex, { dir: srcDir, refreshKey: 0, flashKey: 0 })
   }
 
+  async function restorePane() {
+    if (closedPaneHistory.length === 0) return
+    const { dir, flex: savedFlex } = closedPaneHistory.pop()
+    restoringPane = true
+    try {
+      const afterIndex = focusedPane
+      const totalFlex = paneFlexValues.reduce((a, v) => a + v, 0)
+      const scale = totalFlex / (totalFlex + savedFlex)
+      const newFlexValues = paneFlexValues.map(v => v * scale)
+      newFlexValues.splice(afterIndex + 1, 0, savedFlex)
+      panes = [...panes.slice(0, afterIndex + 1), { dir, refreshKey: 0, flashKey: 0 }, ...panes.slice(afterIndex + 1)]
+      paneFlexValues = newFlexValues
+      focusedPane = afterIndex + 1
+      if (settings?.autoExpandPanes !== false) {
+        const b = await window.krypta.window.getBounds()
+        if (b && b.width < panes.length * COMFORTABLE) {
+          let newWidth = panes.length * COMFORTABLE
+          const rightEdge = b.workAreaX + b.workAreaWidth
+          if (b.x + newWidth > rightEdge) newWidth = rightEdge - b.x
+          await window.krypta.window.setBounds({ x: b.x, y: b.y, width: Math.round(newWidth), height: b.height })
+        }
+      }
+    } finally {
+      restoringPane = false
+    }
+  }
+
   async function removePane(index) {
-    if (panes.length <= 1) { window.krypta.window.close(); return }
+    if (panes.length <= 1) { if (!restoringPane) window.krypta.window.close(); return }
+    const pane = panes[index]
+    if (pane && pane.type !== 'settings' && pane.dir) closedPaneHistory.push({ dir: pane.dir, flex: paneFlexValues[index] })
     const wasAllEqual = paneFlexValues.every(v => Math.abs(v - paneFlexValues[0]) < 0.01)
     const removedFlex = paneFlexValues[index]
     const totalFlex = paneFlexValues.reduce((a, v) => a + v, 0)
@@ -667,17 +724,31 @@
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
         e.preventDefault()
         removePane(focusedPane)
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'r') {
+        e.preventDefault()
+        restorePane()
       } else if (e.key === ',' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         openSettings()
-      } else if (e.shiftKey && e.key === 'ArrowLeft' && focusedPane > 0) {
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+        e.preventDefault()
+        openCairns()
+      } else if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowLeft' && focusedPane > 0) {
         e.preventDefault()
         ;[panes[focusedPane - 1], panes[focusedPane]] = [panes[focusedPane], panes[focusedPane - 1]]
         focusedPane--
-      } else if (e.shiftKey && e.key === 'ArrowRight' && focusedPane < panes.length - 1) {
+      } else if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowRight' && focusedPane < panes.length - 1) {
         e.preventDefault()
         ;[panes[focusedPane], panes[focusedPane + 1]] = [panes[focusedPane + 1], panes[focusedPane]]
         focusedPane++
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowLeft' && !e.shiftKey && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        focusedPane = Math.max(0, focusedPane - 1)
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowRight' && !e.shiftKey && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        focusedPane = Math.min(panes.length - 1, focusedPane + 1)
       } else if (e.key === 'Tab') {
         e.preventDefault()
         focusedPane = e.shiftKey
@@ -709,7 +780,7 @@
         <div class="pane-resizer" onmousedown={(e) => startPaneResize(e, i - 1, i)}></div>
       {/if}
       {#if pane.collapsed}
-        {@const label = pane.type === 'settings' ? 'Settings' : (pane.dir?.split(window.krypta.sep).at(-1) || pane.dir || '')}
+        {@const label = pane.type === 'settings' ? 'Settings' : pane.type === 'cairns' ? 'Cairns' : (pane.dir?.split(window.krypta.sep).at(-1) || pane.dir || '')}
         <div
           class="pane-strip"
           class:focused={focusedPane === i}
@@ -735,6 +806,8 @@
             <span class="strip-icon">
               {#if pane.type === 'settings'}
                 <SlidersHorizontal size={12} strokeWidth={1.5} />
+              {:else if pane.type === 'cairns'}
+                <Star size={12} strokeWidth={1.5} />
               {:else}
                 <Folder size={12} strokeWidth={1.5} />
               {/if}
@@ -754,6 +827,22 @@
             <GripVertical size={10} strokeWidth={2} />
           </div>
         </div>
+      {:else if pane.type === 'cairns'}
+        <CairnsPane
+          focused={focusedPane === i}
+          onFocus={() => { if (mouseHasMoved && !resizingPanes) focusedPane = i }}
+          onAddPane={() => addPane(i)}
+          onClose={() => removePane(i)}
+          onCollapse={() => collapsePane(i)}
+          grace={gracePanes.has(i)}
+          cairns={settings?.cairns ?? []}
+          onRemoveCairn={handleRemoveCairn}
+          onNavigate={(dir) => { panes = panes.map((p, idx) => idx === i ? { dir, refreshKey: 0, flashKey: 0 } : p) }}
+          onOpenInNewPane={(dir, before = false) => addPaneObject(before ? i - 1 : i, { dir, refreshKey: 0, flashKey: 0 })}
+          paneIndex={i}
+          onPaneDrop={handlePaneDrop}
+          flexValue={paneFlexValues[i]}
+        />
       {:else if pane.type === 'settings'}
         <SettingsPane
           focused={focusedPane === i}
@@ -796,6 +885,9 @@
           onFileDrop={handleFileDrop}
           onPaneDrop={handlePaneDrop}
           onError={showToast}
+          onOpenInNewPane={(dir, before = false) => addPaneObject(before ? i - 1 : i, { dir, refreshKey: 0, flashKey: 0 })}
+          cairns={settings?.cairns ?? []}
+          onToggleCairn={handleToggleCairn}
           flexValue={paneFlexValues[i]}
         />
       {/if}
@@ -908,7 +1000,6 @@
 
   .strip-label {
     writing-mode: vertical-rl;
-    transform: rotate(180deg);
     font-size: 10px;
     color: var(--text-dim);
     opacity: 0.45;

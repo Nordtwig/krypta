@@ -14,7 +14,9 @@
     ax = anchorRight
       ? Math.max(4, x - rect.width)
       : (x + rect.width > window.innerWidth - 4 ? x - rect.width : x)
+    ax = Math.max(4, ax)
     ay = y + rect.height > window.innerHeight - 4 ? y - rect.height : y
+    ay = Math.max(4, ay)
     visible = true
 
     function onMouseDown(e) {
@@ -48,8 +50,8 @@
 
   function pick(item) {
     if (item.disabled || item.separator) return
-    item.action()
     onClose()
+    item.action()
   }
 </script>
 

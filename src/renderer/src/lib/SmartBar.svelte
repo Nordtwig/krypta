@@ -69,8 +69,18 @@
       bind:this={inputEl}
       bind:value={query}
       class="smart-input"
-      oninput={() => onInput(query)}
+      oninput={(e) => {
+        const val = e.currentTarget.value
+        if (!val.startsWith('@') && val.includes('@')) {
+          e.currentTarget.value = '@'
+          query = '@'
+          onInput('@')
+        } else {
+          onInput(val)
+        }
+      }}
       onkeydown={handleKeydown}
+      onblur={() => onCancel?.()}
       placeholder={placeholder}
       spellcheck="false"
       autocomplete="off"

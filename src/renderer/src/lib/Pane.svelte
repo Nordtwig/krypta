@@ -29,12 +29,17 @@
     onClose,
     onCollapse,
     onError,
+    onOpenInNewPane,
+    cairns = [],
+    onToggleCairn,
     flexValue = 1,
     grace = false,
   } = $props()
 
   let files = $state([])
   let selectedIndex = $state(0)
+  let keyboardActive = $state(false)
+  let hoveredIndex = $state(-1)
   let sortCol = $state('name')
   let sortDir = $state('asc')
   let creatingType = $state(null)
@@ -49,6 +54,7 @@
   let contextMenu = $state(null)
   let pathbarFlashing = $state(false)
   let flashTimer = null
+  let selectAllTimers = []
 
   $effect(() => {
     if (flashKey === 0) return
@@ -115,7 +121,22 @@
     return i >= 0 ? smartBarQuery.slice(i + 1) : smartBarQuery
   })
 
+  let smartBarCairnsMode = $derived(showSmartBar && smartBarQuery.startsWith('@'))
+
   let displayFiles = $derived.by(() => {
+    if (smartBarCairnsMode) {
+      const filter = smartBarQuery.slice(1).toLowerCase()
+      return (cairns ?? [])
+        .filter(p => !filter || p.toLowerCase().includes(filter))
+        .map(p => ({
+          name: p.split('/').filter(Boolean).at(-1) ?? p,
+          isDirectory: true,
+          _cairnPath: p,
+          size: null,
+          mtime: null,
+          itemCount: null,
+        }))
+    }
     const filter = smartBarFilter()
     const base = (showSmartBar && filter)
       ? files.filter(f => f.name.toLowerCase().includes(filter.toLowerCase()))
@@ -138,11 +159,19 @@
 
   let ghostSuggestion = $derived.by(() => {
     if (!showSmartBar) return ''
+    if (smartBarCairnsMode) {
+      const filter = smartBarQuery.slice(1).toLowerCase()
+      if (!filter) return ''
+      const selected = displayFiles[selectedIndex]
+      if (!selected || !selected.name.toLowerCase().startsWith(filter)) return ''
+      return selected.name.slice(filter.length)
+    }
     const filter = smartBarFilter()
-    if (!filter) return ''
     const selected = displayFiles[selectedIndex]
-    if (!selected || !selected.name.toLowerCase().startsWith(filter.toLowerCase())) return ''
-    return selected.name.slice(filter.length) + (selected.isDirectory ? '/' : '')
+    if (!selected?.isDirectory) return ''
+    if (!filter) return selected.name + '/'
+    if (!selected.name.toLowerCase().startsWith(filter.toLowerCase())) return ''
+    return selected.name.slice(filter.length) + '/'
   })
 
   $effect(() => {
@@ -193,9 +222,45 @@
     loadFiles(currentDir)
   })
 
+  let lastDirMtime = 0
+
+  async function refreshFiles() {
+    try {
+      const newFiles = await window.krypta.readDir(currentDir, { showHidden: settings?.showHidden === true })
+      const { mtime } = await window.krypta.statPath(currentDir)
+      lastDirMtime = mtime
+      const newNames = new Set(newFiles.map(f => f.name))
+      const prevName = files[selectedIndex]?.name
+      files = newFiles
+      loadError = null
+      selectedNames = new Set([...selectedNames].filter(n => newNames.has(n)))
+      const idx = prevName ? newFiles.findIndex(f => f.name === prevName) : -1
+      if (idx >= 0) selectedIndex = idx
+    } catch { /* silent — don't disrupt UI on background refresh */ }
+  }
+
+  // forced refresh on window focus
+  $effect(() => {
+    window.addEventListener('focus', refreshFiles)
+    return () => window.removeEventListener('focus', refreshFiles)
+  })
+
+  // lazy interval: stat the dir every 3s, only readDir if mtime changed
+  $effect(() => {
+    const dir = currentDir
+    const id = setInterval(async () => {
+      try {
+        const { mtime } = await window.krypta.statPath(dir)
+        if (mtime !== lastDirMtime) await refreshFiles()
+      } catch {}
+    }, 3000)
+    return () => clearInterval(id)
+  })
+
   async function loadFiles(dir) {
     try {
       files = await window.krypta.readDir(dir, { showHidden: settings?.showHidden === true })
+      window.krypta.statPath(dir).then(({ mtime }) => { lastDirMtime = mtime }).catch(() => {})
       loadError = null
       if (pendingSelectName) {
         const idx = files.findIndex(f => f.name === pendingSelectName)
@@ -232,6 +297,11 @@
   }
 
   function navigate(entry) {
+    if (entry._cairnPath) {
+      currentDir = entry._cairnPath
+      if (showSmartBar) closeSmartBar()
+      return
+    }
     if (entry.isDirectory) {
       currentDir = window.krypta.joinPath(currentDir, entry.name)
     } else {
@@ -262,9 +332,18 @@
           e.preventDefault()
           openSmartBar()
           break
+        case '@':
+        case '§':
+          e.preventDefault()
+          openCairnsBar()
+          break
+        case '2':
+          if (e.altKey && !e.shiftKey && !e.metaKey) { e.preventDefault(); openCairnsBar() }
+          break
         case 'ArrowDown':
           e.preventDefault()
           pendingDeleteNames = new Set()
+          keyboardActive = true
           if (e.shiftKey) {
             selectedIndex = selectedIndex < 0 ? 0 : Math.min(selectedIndex + 1, displayFiles.length - 1)
             selectRange(anchorIndex, selectedIndex)
@@ -277,6 +356,7 @@
         case 'ArrowUp':
           e.preventDefault()
           pendingDeleteNames = new Set()
+          keyboardActive = true
           if (e.shiftKey) {
             selectedIndex = selectedIndex < 0 ? displayFiles.length - 1 : Math.max(selectedIndex - 1, 0)
             selectRange(anchorIndex, selectedIndex)
@@ -287,7 +367,13 @@
           }
           break
         case 'ArrowRight':
+          if ((e.ctrlKey || e.metaKey) && e.shiftKey && displayFiles[selectedIndex]?.isDirectory) {
+            e.preventDefault()
+            onOpenInNewPane?.(window.krypta.joinPath(currentDir, displayFiles[selectedIndex].name))
+            break
+          }
           if (e.shiftKey) break
+          if (e.ctrlKey || e.metaKey) break
           e.preventDefault()
           if (moveMode) {
             onMoveDirection?.('right')
@@ -298,7 +384,13 @@
           }
           break
         case 'ArrowLeft':
+          if ((e.ctrlKey || e.metaKey) && e.shiftKey && displayFiles[selectedIndex]?.isDirectory) {
+            e.preventDefault()
+            onOpenInNewPane?.(window.krypta.joinPath(currentDir, displayFiles[selectedIndex].name), true)
+            break
+          }
           if (e.shiftKey) break
+          if (e.ctrlKey || e.metaKey) break
           e.preventDefault()
           if (moveMode) {
             onMoveDirection?.('left')
@@ -319,17 +411,40 @@
         case 'Enter':
           if (moveMode) {
             onToggleMoveMode?.()
-          } else {
-            pendingDeleteNames = new Set()
-            selectedNames = new Set()
-            if (displayFiles[selectedIndex]) navigate(displayFiles[selectedIndex])
+            break
           }
+          if ((e.ctrlKey || e.metaKey) && e.shiftKey && displayFiles[selectedIndex]?.isDirectory) {
+            e.preventDefault()
+            onOpenInNewPane?.(window.krypta.joinPath(currentDir, displayFiles[selectedIndex].name))
+            break
+          }
+          e.preventDefault()
+          pendingDeleteNames = new Set()
+          selectedNames = new Set()
+          if (displayFiles[selectedIndex]) navigate(displayFiles[selectedIndex])
           break
         case 'Backspace':
           e.preventDefault()
           pendingDeleteNames = new Set()
           selectedNames = new Set()
           navigateUp()
+          break
+        case 'a':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            selectAllTimers.forEach(clearTimeout)
+            selectAllTimers = []
+            selectedNames = new Set()
+            anchorIndex = 0
+            selectedIndex = displayFiles.length - 1
+            const names = displayFiles.map(f => f.name)
+            const delay = Math.min(12, 300 / names.length)
+            names.forEach((name, i) => {
+              selectAllTimers.push(setTimeout(() => {
+                selectedNames = new Set([...selectedNames, name])
+              }, Math.round(i * delay)))
+            })
+          }
           break
         case 'x':
           if (e.ctrlKey || e.metaKey) {
@@ -355,6 +470,22 @@
             if (clipboard && clipboard.dir !== currentDir) commitPaste()
           }
           break
+        case 'y': {
+          e.preventDefault()
+          const yankTarget = displayFiles[hoveredIndex >= 0 ? hoveredIndex : selectedIndex]
+          navigator.clipboard.writeText(yankTarget ? window.krypta.joinPath(currentDir, yankTarget.name) : currentDir)
+          break
+        }
+        case 'b': {
+          if (e.ctrlKey || e.metaKey) break
+          e.preventDefault()
+          const activeEntry = displayFiles[hoveredIndex >= 0 ? hoveredIndex : selectedIndex]
+          const cairnTarget = activeEntry?.isDirectory
+            ? window.krypta.joinPath(currentDir, activeEntry.name)
+            : currentDir
+          onToggleCairn?.(cairnTarget)
+          break
+        }
         case ' ':
           e.preventDefault()
           {
@@ -376,6 +507,7 @@
           startCreate('folder')
           break
         case 'r':
+          if (e.ctrlKey || e.metaKey) break
         case 'F2':
           e.preventDefault()
           if (displayFiles[selectedIndex]) startRename(displayFiles[selectedIndex].name)
@@ -403,13 +535,28 @@
           break
       }
     }
+    function handleKeyPress(e) {
+      if (!focused || showSmartBar || creatingType !== null || renamingName !== null) return
+      if (e.key === '@') { e.preventDefault(); openCairnsBar() }
+    }
     document.addEventListener('keydown', handleKey)
-    return () => document.removeEventListener('keydown', handleKey)
+    document.addEventListener('keypress', handleKeyPress)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+      document.removeEventListener('keypress', handleKeyPress)
+    }
   })
 
   function openSmartBar() {
     smartBarOriginalDir = currentDir
     smartBarQuery = currentDir.endsWith('/') ? currentDir : currentDir + '/'
+    selectedIndex = Math.max(0, selectedIndex)
+    showSmartBar = true
+  }
+
+  function openCairnsBar() {
+    smartBarOriginalDir = currentDir
+    smartBarQuery = '@'
     showSmartBar = true
   }
 
@@ -420,7 +567,8 @@
   }
 
   function cancelSmartBar() {
-    if (smartBarOriginalDir !== null && smartBarOriginalDir !== currentDir) {
+    const filter = smartBarCairnsMode ? '' : smartBarFilter()
+    if (filter && smartBarOriginalDir !== null && smartBarOriginalDir !== currentDir) {
       currentDir = smartBarOriginalDir
     }
     showSmartBar = false
@@ -430,6 +578,8 @@
 
   async function handleSmartBarInput(query) {
     smartBarQuery = query
+    if (query.startsWith('@')) return
+    if (query.includes('@')) { smartBarQuery = '@'; return }
     const lastSlash = query.lastIndexOf('/')
     const dirPart = query.slice(0, lastSlash + 1)
 
@@ -447,9 +597,30 @@
   }
 
   function handleSmartBarTab() {
+    if (smartBarCairnsMode) {
+      const filter = smartBarQuery.slice(1).toLowerCase()
+      if (!filter) return
+      const selected = displayFiles[selectedIndex]
+      if (!selected || !selected.name.toLowerCase().startsWith(filter)) return
+      const unique = displayFiles.filter(f => f.name.toLowerCase().startsWith(filter)).length === 1
+      if (unique || selected.name.toLowerCase() === filter) {
+        currentDir = selected._cairnPath
+        closeSmartBar()
+      } else {
+        smartBarQuery = '@' + selected.name
+      }
+      return
+    }
     const filter = smartBarFilter()
-    if (!filter) return
     const lastSlash = smartBarQuery.lastIndexOf('/')
+    if (!filter) {
+      const selected = displayFiles[selectedIndex]
+      if (selected?.isDirectory) {
+        smartBarQuery = smartBarQuery.slice(0, lastSlash + 1) + selected.name + '/'
+        handleSmartBarInput(smartBarQuery)
+      }
+      return
+    }
     const dirPart = smartBarQuery.slice(0, lastSlash + 1)
 
     const prefixMatches = files.filter(f => f.name.toLowerCase().startsWith(filter.toLowerCase()))
@@ -523,7 +694,19 @@
 
     if (entry && targets.length === 1) {
       items.push({ label: 'Open', shortcut: 'Enter', action: () => navigate(entry) })
+      if (entry.isDirectory) {
+        items.push({ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(window.krypta.joinPath(currentDir, entry.name)) })
+        const entryPath = window.krypta.joinPath(currentDir, entry.name)
+        const isCairned = (cairns ?? []).includes(entryPath)
+        items.push({ label: isCairned ? 'Remove from Cairns' : 'Add to Cairns', shortcut: 'b', action: () => onToggleCairn?.(entryPath) })
+      }
       items.push({ label: 'Rename', shortcut: 'r', action: () => { renamingName = entry.name; renamingValue = entry.name } })
+      items.push(sep)
+    }
+
+    if (!entry) {
+      const isCairned = (cairns ?? []).includes(currentDir)
+      items.push({ label: isCairned ? 'Remove from Cairns' : 'Add to Cairns', action: () => onToggleCairn?.(currentDir) })
       items.push(sep)
     }
 
@@ -560,7 +743,14 @@
     items.push({ label: 'New File',   shortcut: 'n', action: () => { creatingType = 'file' } })
     items.push({ label: 'New Folder', shortcut: 'N', action: () => { creatingType = 'folder' } })
     items.push(sep)
-    items.push({ label: 'Open Terminal Here', action: () => window.krypta.openTerminal(currentDir) })
+    const terminalDir = (targets.length === 1 && entry?.isDirectory)
+      ? window.krypta.joinPath(currentDir, targets[0])
+      : currentDir
+    const activePath = entry ? window.krypta.joinPath(currentDir, entry.name) : currentDir
+    items.push({ label: 'Open Terminal Here', action: () => window.krypta.openTerminal(terminalDir) })
+    items.push({ label: 'Copy Path', action: () => navigator.clipboard.writeText(activePath) })
+    if (settings?.copyAllPaths && targets.length > 1)
+      items.push({ label: 'Copy All Paths', action: () => navigator.clipboard.writeText(targets.map(n => window.krypta.joinPath(currentDir, n)).join('\n')) })
 
     const cmds = settings?.customCommands ?? []
     if (cmds.length > 0) {
@@ -586,6 +776,14 @@
   }
 
   function commitSmartBar() {
+    if (smartBarCairnsMode) {
+      const target = displayFiles[selectedIndex] ?? displayFiles[0]
+      if (target?._cairnPath) {
+        currentDir = target._cairnPath
+        closeSmartBar()
+      }
+      return
+    }
     if (!smartBarFilter()) {
       closeSmartBar()
       return
@@ -598,6 +796,7 @@
 
   function handleSmartBarArrow(dir) {
     selectedIndex = Math.max(0, Math.min(selectedIndex + dir, displayFiles.length - 1))
+    keyboardActive = true
   }
 
   function formatSize(bytes, isDir) {
@@ -888,7 +1087,8 @@
             <button
               class="crumb"
               class:drop-target={dropCrumb === crumb.path}
-              onclick={() => currentDir = crumb.path}
+              onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { currentDir = crumb.path } }}
+              oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}
               ondragover={(e) => {
                 if (!e.dataTransfer.types.includes('application/krypta-files')) return
                 e.preventDefault()
@@ -925,7 +1125,7 @@
               }}
             >{crumb.name}</button>
           {:else}
-            <button class="crumb" onclick={() => currentDir = crumb.path}>{crumb.name}</button>
+            <button class="crumb" onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
           {/if}
         {/each}
       </div>
@@ -954,6 +1154,8 @@
     class="file-list"
     class:drop-over={dropOverList && !dropTargetFolder}
     bind:this={fileListEl}
+    onmousemove={() => { if (keyboardActive) keyboardActive = false }}
+    onmouseleave={() => { hoveredIndex = -1 }}
     oncontextmenu={(e) => openContextMenu(e, null)}
     onclick={(e) => {
       if (e.target === e.currentTarget) {
@@ -992,6 +1194,8 @@
   >
     {#if loadError}
       <div class="list-notice error">{loadError}</div>
+    {:else if smartBarCairnsMode && displayFiles.length === 0}
+      <div class="list-notice">no cairns — press b on a folder</div>
     {:else if files.length === 0 && creatingType === null}
       <div class="list-notice">empty folder</div>
     {/if}
@@ -1025,7 +1229,9 @@
       <div
         class="file-row"
         class:cursor={i === selectedIndex}
+        class:keyboard-active={i === selectedIndex && keyboardActive}
         class:in-selection={selectedNames.has(entry.name)}
+        onmouseenter={() => { hoveredIndex = i }}
         class:pending-delete={pendingDeleteNames.has(entry.name)}
         class:cut={clipboard?.type === 'cut' && clipboard?.dir === currentDir && clipboard?.names?.has(entry.name)}
         class:carrying={moveMode?.dir === currentDir && moveMode?.names?.has(entry.name)}
@@ -1035,7 +1241,9 @@
         oncontextmenu={(e) => openContextMenu(e, entry)}
         onclick={(e) => {
           pendingDeleteNames = new Set()
-          if (e.ctrlKey || e.metaKey) {
+          if ((e.ctrlKey || e.metaKey) && e.shiftKey && entry.isDirectory) {
+            onOpenInNewPane?.(window.krypta.joinPath(currentDir, entry.name))
+          } else if (e.ctrlKey || e.metaKey) {
             const next = new Set(selectedNames)
             next.has(entry.name) ? next.delete(entry.name) : next.add(entry.name)
             selectedNames = next
@@ -1210,7 +1418,7 @@
   }
 
   .pathbar {
-    height: 32px;
+    height: 36px;
     display: flex;
     align-items: center;
     padding: 0 12px;
@@ -1244,7 +1452,7 @@
   .breadcrumbs {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 0;
     overflow-x: auto;
     scrollbar-width: none;
     min-width: 0;
@@ -1256,9 +1464,9 @@
     background: none;
     border: none;
     color: var(--text-dim);
-    font-size: 11px;
+    font-size: 12px;
     cursor: pointer;
-    padding: 2px 4px;
+    padding: 2px 3px;
     border-radius: 3px;
     white-space: nowrap;
     transition: color 0.1s;
@@ -1275,7 +1483,8 @@
   .sep {
     color: var(--text-dim);
     font-size: 10px;
-    opacity: 0.4;
+    opacity: 0.25;
+    padding: 0 1px;
   }
 
   .file-header {
@@ -1398,7 +1607,8 @@
     box-shadow: inset 2px 0 0 rgba(80, 200, 120, 0.45);
   }
 
-  .pane.focused .file-row.cursor {
+  .pane.focused .file-row.cursor:hover,
+  .pane.focused .file-row.cursor.keyboard-active {
     background: rgba(80, 200, 120, 0.1);
     box-shadow: inset 3px 0 0 var(--emerald);
   }
@@ -1488,13 +1698,8 @@
     transition: opacity 0.15s, color 0.1s;
   }
 
-  .pane:hover .pane-action-btn,
-  .pane:hover .pane-actions-sep,
-  .pane.focused .pane-action-btn,
-  .pane.focused .pane-actions-sep { opacity: 0.15; }
-
   .pathbar:hover .pane-action-btn,
-  .pathbar:hover .pane-actions-sep { opacity: 0.35; }
+  .pathbar:hover .pane-actions-sep { opacity: 0.15; }
 
   .pane-action-btn:hover { opacity: 1 !important; color: var(--text); }
   .pane-action-btn.close:hover { color: var(--pink); }

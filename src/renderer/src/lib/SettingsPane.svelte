@@ -10,6 +10,7 @@
     showHidden:        false,
     restoreSession:    true,
     autoExpandPanes:   true,
+    copyAllPaths:      false,
   }
 
   let { focused = false, onFocus, onAddPane, onClose, onCollapse, settings, onSettingsChange, paneIndex = 0, onPaneDrop, flexValue = 1, grace = false } = $props()
@@ -38,8 +39,13 @@
       keys: [
         { key: 'Ctrl+T',           label: 'New pane' },
         { key: 'Ctrl+W',           label: 'Close pane' },
+        { key: 'Ctrl+R',           label: 'Restore last closed pane' },
         { key: 'Tab / Shift+Tab',  label: 'Cycle panes' },
+        { key: 'Ctrl+← / →',      label: 'Focus prev / next pane' },
         { key: 'Shift+← / →',     label: 'Move pane' },
+        { key: '[',                label: 'Collapse / expand pane' },
+        { key: 'Shift+[',          label: 'Collapse all / expand all' },
+        { key: 'Ctrl+B',           label: 'Cairns' },
         { key: 'Ctrl+,',           label: 'Settings' },
         { key: 'Ctrl+Z',           label: 'Undo' },
         { key: 'Ctrl+Y',           label: 'Redo' },
@@ -48,29 +54,48 @@
     {
       label: 'Pane',
       keys: [
-        { key: '↑ / ↓',           label: 'Move selection' },
-        { key: '→ / Enter',        label: 'Open / enter folder' },
-        { key: '← / Backspace',    label: 'Go up' },
-        { key: '/',                label: 'SmartBar' },
-        { key: 'n',                label: 'New file' },
-        { key: 'N',                label: 'New folder' },
-        { key: 'r',                label: 'Rename' },
-        { key: 'Del',              label: 'Move to trash' },
-        { key: 'Ctrl+X',           label: 'Cut' },
-        { key: 'Ctrl+C',           label: 'Copy' },
-        { key: 'Ctrl+V',           label: 'Paste' },
-        { key: 'Ctrl+M',           label: 'Move mode' },
-        { key: 'Shift+Click',      label: 'Range select' },
-        { key: 'Ctrl+Click',       label: 'Multi-select' },
+        { key: '↑ / ↓',                       label: 'Move selection' },
+        { key: '→ / Enter',                    label: 'Open / enter folder' },
+        { key: '← / Backspace',                label: 'Go up' },
+        { key: 'Ctrl+Shift+→ / Enter / Click', label: 'Open in new pane (right)' },
+        { key: 'Ctrl+Shift+←',                 label: 'Open in new pane (left)' },
+        { key: 'Space',                         label: 'Toggle selection' },
+        { key: '/',                             label: 'SmartBar' },
+        { key: '@ / §',                         label: 'SmartBar (Cairns mode)' },
+        { key: 'b',                             label: 'Toggle cairn (hover target)' },
+        { key: 'y',                             label: 'Copy path (hover target)' },
+        { key: 'n',                             label: 'New file' },
+        { key: 'N',                             label: 'New folder' },
+        { key: 'r',                             label: 'Rename' },
+        { key: 'Del',                           label: 'Move to trash' },
+        { key: 'Ctrl+A',                        label: 'Select all' },
+        { key: 'Ctrl+X',                        label: 'Cut' },
+        { key: 'Ctrl+C',                        label: 'Copy' },
+        { key: 'Ctrl+V',                        label: 'Paste' },
+        { key: 'm',                             label: 'Move mode' },
+        { key: 'Shift+Click',                   label: 'Range select' },
+        { key: 'Ctrl+Click',                    label: 'Multi-select' },
       ]
     },
     {
       label: 'SmartBar',
       keys: [
-        { key: 'Tab',              label: 'Autocomplete' },
-        { key: 'Backspace',        label: 'Jump up one segment' },
-        { key: 'Enter',            label: 'Navigate' },
-        { key: 'Escape',           label: 'Cancel' },
+        { key: '↑ / ↓',   label: 'Navigate suggestions' },
+        { key: 'Tab',      label: 'Autocomplete' },
+        { key: 'Backspace', label: 'Jump up one segment' },
+        { key: 'Enter',    label: 'Navigate' },
+        { key: '@',        label: 'Switch to Cairns mode' },
+        { key: 'Escape',   label: 'Commit or cancel' },
+      ]
+    },
+    {
+      label: 'Cairns',
+      keys: [
+        { key: '↑ / ↓',        label: 'Move selection' },
+        { key: '→ / Enter',    label: 'Navigate to cairn' },
+        { key: 'Ctrl+Shift+→', label: 'Open in new pane (right)' },
+        { key: 'Ctrl+Shift+←', label: 'Open in new pane (left)' },
+        { key: 'b',            label: 'Remove cairn' },
       ]
     },
   ]
@@ -93,12 +118,13 @@
     if (section === 'hotkeys') return hotkeyRows
     if (section === 'general') return [
       { type: 'toggle', id: 'springLoad', label: 'Spring-load folders', value: settings.springLoad !== false, default: DEFAULTS.springLoad },
-      { type: 'range',  id: 'springLoadDelay', label: 'Spring-load delay', value: settings.springLoadDelay ?? DEFAULTS.springLoadDelay, min: 200, max: 2000, step: 50, disabled: settings.springLoad === false, default: DEFAULTS.springLoadDelay },
+      { type: 'range',  id: 'springLoadDelay', label: 'Spring-load delay', value: settings.springLoadDelay ?? DEFAULTS.springLoadDelay, min: 200, max: 2000, step: 50, disabled: settings.springLoad === false, default: DEFAULTS.springLoadDelay, sub: true },
       { type: 'toggle', id: 'autoHideColumns', label: 'Auto-hide narrow columns', value: settings.autoHideColumns !== false, default: DEFAULTS.autoHideColumns },
       { type: 'toggle', id: 'showCreateBtn',   label: 'Quick-create button',       value: settings.showCreateBtn !== false,  default: DEFAULTS.showCreateBtn },
       { type: 'toggle', id: 'showHidden',      label: 'Show hidden files',          value: settings.showHidden === true,      default: DEFAULTS.showHidden },
       { type: 'toggle', id: 'restoreSession',  label: 'Restore session on launch',  value: settings.restoreSession !== false,  default: DEFAULTS.restoreSession },
       { type: 'toggle', id: 'autoExpandPanes', label: 'Expand window for new panes', value: settings.autoExpandPanes !== false, default: DEFAULTS.autoExpandPanes },
+      { type: 'toggle', id: 'copyAllPaths',    label: 'Copy all paths on multi-select', value: settings.copyAllPaths === true, default: DEFAULTS.copyAllPaths },
     ]
     return []
   })
@@ -302,18 +328,19 @@
         <div
           class="row"
           class:selected={i === selectedIndex}
+          class:sub={row.sub}
           onclick={() => { selectedIndex = i; activateRow(row) }}
           onmouseenter={() => selectedIndex = i}
         >
           <span class="cell-icon"></span>
           <span class="cell-label">{row.label}</span>
           <span class="cell-right value" class:on={row.value}>
-            {row.value ? 'on' : 'off'}
             {#if row.default !== undefined && row.value !== row.default}
               <button class="reset-btn" onclick={(e) => { e.stopPropagation(); resetToDefault(row) }} title="Reset to default">
                 <RotateCcw size={9} color="currentColor" strokeWidth={2.5} />
               </button>
             {/if}
+            {row.value ? 'on' : 'off'}
           </span>
         </div>
 
@@ -400,6 +427,7 @@
           class="row range-row"
           class:selected={i === selectedIndex}
           class:disabled={row.disabled}
+          class:sub={row.sub}
           onclick={() => selectedIndex = i}
           onmouseenter={() => selectedIndex = i}
         >
@@ -415,12 +443,12 @@
               disabled={row.disabled}
               oninput={(e) => handleRangeChange(row.id, parseInt(e.currentTarget.value))}
             />
-            <span class="range-value">{row.value}ms</span>
             {#if row.default !== undefined && row.value !== row.default}
               <button class="reset-btn" onclick={(e) => { e.stopPropagation(); resetToDefault(row) }} title="Reset to default">
                 <RotateCcw size={9} color="currentColor" strokeWidth={2.5} />
               </button>
             {/if}
+            <span class="range-value">{row.value}ms</span>
           </div>
         </div>
       {/if}
@@ -461,7 +489,7 @@
     align-items: center;
     gap: 4px;
     padding: 0 12px;
-    height: 32px;
+    height: 36px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     font-size: 11px;
@@ -563,7 +591,7 @@
     display: grid;
     grid-template-columns: 28px 1fr auto;
     align-items: center;
-    height: 26px;
+    height: 28px;
     padding: 0 12px 0 0;
     gap: 0;
     cursor: default;
@@ -583,6 +611,7 @@
 
   .row:not(.non-interactive):hover { background: rgba(212, 96, 110, 0.07); }
   .row.dim { opacity: 0.5; }
+  .row.sub { grid-template-columns: 44px 1fr auto; }
   .row.non-interactive { cursor: default; }
 
   .cell-icon {
@@ -610,7 +639,8 @@
     padding-right: 4px;
   }
 
-  .cell-right.value { opacity: 0.5; }
+  .cell-right.value { opacity: 0.5; gap: 5px; }
+  .cell-right.value:not(.on) { color: var(--pink); opacity: 0.7; }
   .cell-right.value.on { color: var(--emerald); opacity: 0.9; }
 
   .cell-right.command {
@@ -723,7 +753,7 @@
     padding: 0;
     cursor: pointer;
     color: var(--text-dim);
-    opacity: 0.45;
+    opacity: 0.8;
     display: flex;
     align-items: center;
     flex-shrink: 0;
@@ -731,7 +761,7 @@
   }
   .reset-btn:hover { opacity: 1; color: var(--pink); }
 
-  .range-row { height: 32px; }
+  .range-row { height: 28px; overflow: hidden; }
 
   .range-control {
     display: flex;
@@ -742,6 +772,7 @@
 
   .range-control input[type="range"] {
     width: 80px;
+    height: 16px;
     accent-color: var(--emerald);
     cursor: pointer;
   }
