@@ -72,7 +72,17 @@ contextBridge.exposeInMainWorld('krypta', {
 
   statPath: async (filePath) => {
     const s = await stat(filePath)
-    return { size: s.size, mtime: s.mtime }
+    return { size: s.size, mtime: s.mtime, mode: s.mode }
+  },
+
+  readDirNames: async (dirPath) => {
+    const entries = await readdir(dirPath, { withFileTypes: true })
+    return entries
+      .sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+      .map(e => ({ name: e.name, isDirectory: e.isDirectory() }))
   },
 
   isRoot: (dirPath) => dirname(dirPath) === dirPath,

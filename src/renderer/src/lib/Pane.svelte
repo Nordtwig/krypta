@@ -52,6 +52,34 @@
   let anchorIndex = $state(0)
   let pendingDeleteNames = $state(new Set())
   let contextMenu = $state(null)
+  let showScry = $state(false)
+  let scryEntry = $state(null)
+  let scryData = $state(null)
+  let scryLoading = $state(false)
+  let scryAnchorY = $state(null)
+  let scryBelow = $state(true)
+  let scryPanelStyle = $derived.by(() => {
+    if (scryAnchorY === null) return 'bottom: 0; max-height: 70%'
+    const rowTop = Math.max(0, scryAnchorY - 62)
+    const rowBottom = rowTop + 28
+    return scryBelow
+      ? `top: ${rowBottom}px; max-height: calc(100% - ${rowBottom + 4}px)`
+      : `bottom: calc(100% - ${rowTop}px); max-height: calc(${rowTop - 4}px)`
+  })
+
+  let scryOverlayStyle = $derived.by(() => {
+    const dark = 'rgba(4,10,15,0.72)'
+    if (scryAnchorY === null) return `background: ${dark}`
+    const rowTop = Math.max(0, scryAnchorY - 62)
+    const rowBottom = rowTop + 28
+    const stops = [
+      rowTop > 0 ? `${dark} ${rowTop}px` : null,
+      `transparent ${rowTop}px`,
+      `transparent ${rowBottom}px`,
+      `${dark} ${rowBottom}px`,
+    ].filter(Boolean).join(', ')
+    return `background: linear-gradient(to bottom, ${stops})`
+  })
   let pathbarFlashing = $state(false)
   let flashTimer = null
   let selectAllTimers = []
@@ -486,6 +514,23 @@
           onToggleCairn?.(cairnTarget)
           break
         }
+        case 'i':
+        case 'p': {
+          if (e.ctrlKey || e.metaKey) break
+          e.preventDefault()
+          if (showScry) { closeScry(); break }
+          const activeIdx = hoveredIndex >= 0 ? hoveredIndex : selectedIndex
+          const scryEntry = displayFiles[activeIdx]
+          if (scryEntry) {
+            const offset = creatingType !== null ? 1 : 0
+            const row = fileListEl?.children[activeIdx + offset]
+            const paneRect = paneEl?.getBoundingClientRect()
+            const rowRect = row?.getBoundingClientRect()
+            const anchorY = (rowRect && paneRect) ? rowRect.top - paneRect.top : null
+            openScry(scryEntry, anchorY)
+          }
+          break
+        }
         case ' ':
           e.preventDefault()
           {
@@ -528,6 +573,7 @@
           break
         }
         case 'Escape':
+          if (showScry) { closeScry(); break }
           pendingDeleteNames = new Set()
           selectedNames = new Set()
           selectedIndex = -1
@@ -700,6 +746,15 @@
         const isCairned = (cairns ?? []).includes(entryPath)
         items.push({ label: isCairned ? 'Remove from Cairns' : 'Add to Cairns', shortcut: 'b', action: () => onToggleCairn?.(entryPath) })
       }
+      items.push({ label: 'Scry', shortcut: 'i', action: () => {
+        const idx = displayFiles.findIndex(f => f.name === entry.name)
+        const offset = creatingType !== null ? 1 : 0
+        const row = idx >= 0 ? fileListEl?.children[idx + offset] : null
+        const paneRect = paneEl?.getBoundingClientRect()
+        const rowRect = row?.getBoundingClientRect()
+        const anchorY = (rowRect && paneRect) ? rowRect.top - paneRect.top : null
+        openScry(entry, anchorY)
+      }})
       items.push({ label: 'Rename', shortcut: 'r', action: () => { renamingName = entry.name; renamingValue = entry.name } })
       items.push(sep)
     }
@@ -959,6 +1014,50 @@
     } catch (err) {
       onError?.(`${type === 'cut' ? 'Move' : 'Copy'} failed — ${errorReason(err)}`)
     }
+  }
+
+  async function openScry(entry, anchorY = null) {
+    scryAnchorY = anchorY
+    if (anchorY !== null && paneEl) {
+      const overlayHeight = paneEl.getBoundingClientRect().height - 82
+      scryBelow = (anchorY - 62) < overlayHeight / 2
+    } else {
+      scryBelow = true
+    }
+    scryEntry = { name: entry.name, isDirectory: entry.isDirectory, size: entry.size, mtime: entry.mtime, itemCount: entry.itemCount }
+    const path = entry._cairnPath ?? window.krypta.joinPath(currentDir, entry.name)
+    scryLoading = true
+    showScry = true
+    scryData = null
+    try {
+      const statResult = await window.krypta.statPath(path)
+      let children = null
+      if (entry.isDirectory) {
+        children = await window.krypta.readDirNames(path)
+      }
+      scryData = { path, name: entry.name, isDirectory: entry.isDirectory, stat: statResult, children }
+    } finally {
+      scryLoading = false
+    }
+  }
+
+  function closeScry() {
+    showScry = false
+    scryEntry = null
+    scryData = null
+    scryLoading = false
+    scryAnchorY = null
+    scryBelow = true
+  }
+
+  function formatMode(mode) {
+    if (mode == null) return '—'
+    return (mode & 0o777).toString(8).padStart(3, '0')
+  }
+
+  function fileExt(name) {
+    const dot = name.lastIndexOf('.')
+    return dot > 0 ? name.slice(dot) : '—'
   }
 
   function setSort(col) {
@@ -1231,6 +1330,7 @@
         class:cursor={i === selectedIndex}
         class:keyboard-active={i === selectedIndex && keyboardActive}
         class:in-selection={selectedNames.has(entry.name)}
+        class:scrying={showScry && scryEntry?.name === entry.name}
         onmouseenter={() => { hoveredIndex = i }}
         class:pending-delete={pendingDeleteNames.has(entry.name)}
         class:cut={clipboard?.type === 'cut' && clipboard?.dir === currentDir && clipboard?.names?.has(entry.name)}
@@ -1373,6 +1473,69 @@
       onclick={openCreateMenu}
       title={contextMenu?.fromCreate ? 'Close' : 'New file or folder'}
     >{contextMenu?.fromCreate ? '×' : '+'}</button>
+  {/if}
+
+  {#if showScry}
+    <div class="scry-overlay" style={scryOverlayStyle} onclick={(e) => { if (e.target === e.currentTarget) closeScry() }}>
+      <div class="scry-panel" class:above={!scryBelow} style={scryPanelStyle}>
+        <div class="scry-dismiss">
+          <button class="scry-close" onclick={(e) => { e.stopPropagation(); closeScry() }}>×</button>
+        </div>
+        {#if scryLoading || !scryData}
+          <div class="scry-loading">scrying…</div>
+        {:else}
+          {#if scryData.isDirectory}
+            <div class="scry-children">
+              {#if scryData.children.length === 0}
+                <div class="scry-empty">empty folder</div>
+              {:else}
+                {#each scryData.children as child}
+                  <div class="scry-child-row">
+                    <span class="scry-child-icon">
+                      {#if child.isDirectory}
+                        <Folder size={12} color="var(--pink)" strokeWidth={1.5} />
+                      {:else}
+                        <File size={12} color="var(--text-dim)" strokeWidth={1.5} />
+                      {/if}
+                    </span>
+                    <span class="scry-child-name">{child.name}</span>
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+          <div class="scry-meta" class:standalone={!scryData.isDirectory}>
+            <div class="scry-meta-row">
+              <span class="scry-meta-key">path</span>
+              <span class="scry-meta-val scry-path">{scryData.path}</span>
+            </div>
+            {#if scryData.isDirectory}
+              <div class="scry-meta-row">
+                <span class="scry-meta-key">items</span>
+                <span class="scry-meta-val">{scryData.children.length} {scryData.children.length === 1 ? 'item' : 'items'}</span>
+              </div>
+            {:else}
+              <div class="scry-meta-row">
+                <span class="scry-meta-key">size</span>
+                <span class="scry-meta-val">{formatSize(scryData.stat.size, false)}</span>
+              </div>
+              <div class="scry-meta-row">
+                <span class="scry-meta-key">type</span>
+                <span class="scry-meta-val">{fileExt(scryData.name)}</span>
+              </div>
+            {/if}
+            <div class="scry-meta-row">
+              <span class="scry-meta-key">modified</span>
+              <span class="scry-meta-val">{formatDate(scryData.stat.mtime, true)}</span>
+            </div>
+            <div class="scry-meta-row">
+              <span class="scry-meta-key">permissions</span>
+              <span class="scry-meta-val">{formatMode(scryData.stat.mode)}</span>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
   {/if}
 
   {#if contextMenu}
@@ -1851,5 +2014,154 @@
     border-radius: 1px;
     pointer-events: none;
     opacity: 0.7;
+  }
+
+  .scry-overlay {
+    position: absolute;
+    top: 62px;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    z-index: 10;
+  }
+
+  .scry-panel {
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: var(--bg-raised);
+    border-top: 1px solid rgba(212, 96, 110, 0.2);
+    border-bottom: none;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .scry-panel.above {
+    border-top: none;
+    border-bottom: 1px solid rgba(212, 96, 110, 0.2);
+  }
+
+  .file-row.scrying {
+    box-shadow: inset 2px 0 0 rgba(212, 96, 110, 0.6) !important;
+  }
+
+  .scry-dismiss {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    z-index: 1;
+  }
+
+  .scry-close {
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.35;
+    transition: opacity 0.1s, color 0.1s;
+    padding: 0;
+  }
+  .scry-close:hover { opacity: 1; color: var(--pink); }
+
+  .scry-loading {
+    padding: 20px 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.3;
+    text-align: center;
+  }
+
+  .scry-children {
+    flex: 1;
+    overflow-y: auto;
+    padding: 3px 0;
+    min-height: 0;
+  }
+
+  .scry-empty {
+    padding: 20px 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.3;
+    text-align: center;
+    user-select: none;
+  }
+
+  .scry-child-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    height: 24px;
+  }
+
+  .scry-child-icon {
+    display: flex;
+    flex-shrink: 0;
+  }
+
+  .scry-child-name {
+    font-size: 11px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .scry-meta {
+    flex-shrink: 0;
+    padding: 9px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid var(--border);
+  }
+
+  .scry-meta.standalone {
+    flex: 1;
+    border-top: none;
+    overflow-y: auto;
+  }
+
+  .scry-meta-row {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+  }
+
+  .scry-meta-key {
+    font-size: 9px;
+    color: var(--text-dim);
+    opacity: 0.45;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    flex-shrink: 0;
+    width: 70px;
+  }
+
+  .scry-meta-val {
+    font-size: 11px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .scry-path {
+    font-size: 10px;
+    color: var(--text-dim);
+    white-space: normal;
+    word-break: break-all;
+    line-height: 1.5;
   }
 </style>
