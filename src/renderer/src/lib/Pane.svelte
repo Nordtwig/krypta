@@ -1,5 +1,6 @@
 <script>
   import { Folder, File, GripVertical, X, ChevronLeft } from 'lucide-svelte'
+  import { getFileIcon } from './fileIcons.js'
   import SmartBar from './SmartBar.svelte'
   import ContextMenu from './ContextMenu.svelte'
 
@@ -1425,7 +1426,8 @@
           {#if entry.isDirectory}
             <Folder size={14} color="var(--pink)" strokeWidth={1.5} />
           {:else}
-            <File size={14} color="var(--text-dim)" strokeWidth={1.5} />
+            {@const FileIcon = getFileIcon(entry.name)}
+            <FileIcon size={14} color="var(--text-dim)" strokeWidth={1.5} />
           {/if}
         </span>
         <span class="col-name">
@@ -1495,7 +1497,8 @@
                       {#if child.isDirectory}
                         <Folder size={12} color="var(--pink)" strokeWidth={1.5} />
                       {:else}
-                        <File size={12} color="var(--text-dim)" strokeWidth={1.5} />
+                        {@const FileIcon = getFileIcon(child.name)}
+                        <FileIcon size={12} color="var(--text-dim)" strokeWidth={1.5} />
                       {/if}
                     </span>
                     <span class="scry-child-name">{child.name}</span>

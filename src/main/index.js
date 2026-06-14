@@ -28,6 +28,7 @@ function createWindow() {
     height: 520,
     minWidth: 200,
     minHeight: 100,
+    show: !!process.env['ELECTRON_RENDERER_URL'],
     titleBarStyle: 'hidden',
     backgroundColor: '#091925',
     webPreferences: {
@@ -55,13 +56,12 @@ function createWindow() {
       }
     })
   }
+  if (!process.env['ELECTRON_RENDERER_URL']) win.once('ready-to-show', () => win.show())
   win.on('closed', () => { win = null })
 }
 
-app.disableHardwareAcceleration()
-
-app.on('ready', async () => {
-  await flushKryptaTrash()  // sweep any leftovers from a previous crash
+app.on('ready', () => {
+  flushKryptaTrash()  // fire-and-forget; sweep leftovers from a previous crash
   createWindow()
 })
 

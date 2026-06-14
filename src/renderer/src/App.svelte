@@ -5,16 +5,17 @@
   import Pane from './lib/Pane.svelte'
   import SettingsPane from './lib/SettingsPane.svelte'
   import CairnsPane from './lib/CairnsPane.svelte'
+  import KryptaLogo from './lib/KryptaLogo.svelte'
 
   const COMFORTABLE = 300
   const DEFAULT_WIDTH = 450
   const STRIP_WIDTH = 32
 
   let focusedPane = $state(0)
-  let panes = $state([{ dir: window.krypta.homeDir, refreshKey: 0, flashKey: 0 }])
+  let panes = $state([])
   let closedPaneHistory = []
   let restoringPane = false
-  let paneFlexValues = $state([1])
+  let paneFlexValues = $state([])
   let mainEl = $state(null)
   let resizingPanes = $state(false)
   let settings = $state({ useKryptaTrash: true, customCommands: [] })
@@ -30,24 +31,31 @@
   }
 
   onMount(async () => {
-    settings = await window.krypta.loadSettings()
-    if (settings.restoreSession !== false) {
-      const session = await window.krypta.loadSession()
-      if (session?.panes?.length) {
-        const restored = await Promise.all(session.panes.map(async (p) => {
-          const collapseState = p.collapsed ? { collapsed: true, collapsedFlex: p.collapsedFlex, collapsedWidth: p.collapsedWidth } : {}
-          if (p.type === 'settings') return { type: 'settings', ...collapseState }
-          if (p.type === 'cairns') return { type: 'cairns', ...collapseState }
-          let dir = p.dir ?? window.krypta.homeDir
-          try { await window.krypta.statPath(dir) } catch { dir = window.krypta.homeDir }
-          return { dir, refreshKey: 0, flashKey: 0, ...collapseState }
-        }))
-        panes = restored
-        paneFlexValues = session.flexValues?.length === restored.length
-          ? session.flexValues
-          : restored.map(() => 1)
-        focusedPane = Math.min(session.focusedPane ?? 0, restored.length - 1)
-      }
+    const [loadedSettings, session] = await Promise.all([
+      window.krypta.loadSettings(),
+      window.krypta.loadSession()
+    ])
+    settings = loadedSettings
+
+    if (loadedSettings.restoreSession !== false && session?.panes?.length) {
+      const restored = await Promise.all(session.panes.map(async (p) => {
+        const collapseState = p.collapsed ? { collapsed: true, collapsedFlex: p.collapsedFlex, collapsedWidth: p.collapsedWidth } : {}
+        if (p.type === 'settings') return { type: 'settings', ...collapseState }
+        if (p.type === 'cairns') return { type: 'cairns', ...collapseState }
+        let dir = p.dir ?? window.krypta.homeDir
+        try { await window.krypta.statPath(dir) } catch { dir = window.krypta.homeDir }
+        return { dir, refreshKey: 0, flashKey: 0, ...collapseState }
+      }))
+      panes = restored
+      paneFlexValues = session.flexValues?.length === restored.length
+        ? session.flexValues
+        : restored.map(() => 1)
+      focusedPane = Math.min(session.focusedPane ?? 0, restored.length - 1)
+    } else {
+      panes = [loadedSettings.startScreen === 'cairns'
+        ? { type: 'cairns' }
+        : { dir: window.krypta.homeDir, refreshKey: 0, flashKey: 0 }]
+      paneFlexValues = [1]
     }
     sessionLoaded = true
   })
@@ -775,6 +783,17 @@
   <Titlebar />
   <main bind:this={mainEl}>
 
+    {#if !sessionLoaded}
+      <div class="loading-screen">
+        <KryptaLogo size={36} color="var(--text-dim)" />
+        <div class="loading-dots">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+      </div>
+    {/if}
+
     {#each panes as pane, i (i)}
       {#if i > 0 && !(pane.collapsed && panes[i - 1].collapsed)}
         <div class="pane-resizer" onmousedown={(e) => startPaneResize(e, i - 1, i)}></div>
@@ -1046,5 +1065,36 @@
   @keyframes toast-out {
     from { opacity: 1; }
     to   { opacity: 0; }
+  }
+
+  .loading-screen {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+  }
+
+  .loading-dots {
+    display: flex;
+    gap: 5px;
+  }
+
+  .dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--pink);
+    animation: dot-bounce 1.2s ease-in-out infinite;
+    opacity: 0.3;
+  }
+
+  .dot:nth-child(2) { animation-delay: 0.2s; }
+  .dot:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes dot-bounce {
+    0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
+    40% { transform: translateY(-5px); opacity: 0.8; }
   }
 </style>

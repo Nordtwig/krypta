@@ -9,6 +9,7 @@
     showCreateBtn:     true,
     showHidden:        false,
     restoreSession:    true,
+    startScreen:       'home',
     autoExpandPanes:   true,
     copyAllPaths:      false,
   }
@@ -123,6 +124,7 @@
       { type: 'toggle', id: 'showCreateBtn',   label: 'Quick-create button',       value: settings.showCreateBtn !== false,  default: DEFAULTS.showCreateBtn },
       { type: 'toggle', id: 'showHidden',      label: 'Show hidden files',          value: settings.showHidden === true,      default: DEFAULTS.showHidden },
       { type: 'toggle', id: 'restoreSession',  label: 'Restore session on launch',  value: settings.restoreSession !== false,  default: DEFAULTS.restoreSession },
+      { type: 'select', id: 'startScreen', label: 'Start with', value: settings.startScreen ?? DEFAULTS.startScreen, default: DEFAULTS.startScreen, disabled: settings.restoreSession !== false, sub: true, options: [{ value: 'home', label: 'Home directory' }, { value: 'cairns', label: 'Cairns' }] },
       { type: 'toggle', id: 'autoExpandPanes', label: 'Expand window for new panes', value: settings.autoExpandPanes !== false, default: DEFAULTS.autoExpandPanes },
       { type: 'toggle', id: 'copyAllPaths',    label: 'Copy all paths on multi-select', value: settings.copyAllPaths === true, default: DEFAULTS.copyAllPaths },
     ]
@@ -141,6 +143,13 @@
       case 'toggle':
         onSettingsChange({ ...settings, [row.id]: !row.value })
         break
+      case 'select': {
+        if (row.disabled) break
+        const idx = row.options.findIndex(o => o.value === row.value)
+        const next = row.options[(idx + 1) % row.options.length]
+        onSettingsChange({ ...settings, [row.id]: next.value })
+        break
+      }
       case 'action':
         if (row.id === 'flush') window.krypta.flushKryptaTrash()
         break
@@ -450,6 +459,27 @@
             {/if}
             <span class="range-value">{row.value}ms</span>
           </div>
+        </div>
+
+      {:else if row.type === 'select'}
+        <div
+          class="row"
+          class:selected={i === selectedIndex}
+          class:sub={row.sub}
+          class:disabled={row.disabled}
+          onclick={() => { selectedIndex = i; activateRow(row) }}
+          onmouseenter={() => selectedIndex = i}
+        >
+          <span class="cell-icon"></span>
+          <span class="cell-label">{row.label}</span>
+          <span class="cell-right value on">
+            {#if row.default !== undefined && row.value !== row.default}
+              <button class="reset-btn" onclick={(e) => { e.stopPropagation(); resetToDefault(row) }} title="Reset to default">
+                <RotateCcw size={9} color="currentColor" strokeWidth={2.5} />
+              </button>
+            {/if}
+            {row.options.find(o => o.value === row.value)?.label ?? row.value}
+          </span>
         </div>
       {/if}
     {/each}
