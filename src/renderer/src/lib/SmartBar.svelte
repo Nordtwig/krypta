@@ -1,7 +1,8 @@
 <script>
   import { onMount } from 'svelte'
+  import { isKnownTag } from './search.js'
 
-  let { query = $bindable(), placeholder = '', onInput, onSubmit, onCancel, onArrow, onTab, ghostSuffix = '' } = $props()
+  let { query = $bindable(), placeholder = '', onInput, onSubmit, onCancel, onArrow, onTab, ghostSuffix = '', chips = [], onChipAdd, onChipRemove } = $props()
 
   let inputEl = $state(null)
   let ghostInnerEl = $state(null)
@@ -32,7 +33,11 @@
       onTab?.()
     } else if (e.key === 'Backspace') {
       const atEnd = inputEl?.selectionStart === query.length && inputEl?.selectionEnd === query.length
-      if (atEnd && query.endsWith('/') && query.length > 1) {
+      if (atEnd && query === '?' && chips.length > 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        onChipRemove?.(chips.at(-1))
+      } else if (atEnd && query.endsWith('/') && query.length > 1) {
         e.preventDefault()
         e.stopPropagation()
         const stripped = query.slice(0, -1)
@@ -57,6 +62,14 @@
 </script>
 
 <div class="smartbar">
+  {#each chips as chip}
+    <span class="chip" class:unknown={!isKnownTag(chip)}>
+      #{chip}<button
+        class="chip-remove"
+        onmousedown={(e) => { e.preventDefault(); onChipRemove?.(chip) }}
+      >×</button>
+    </span>
+  {/each}
   <div class="input-wrap">
     {#if ghostSuffix}
       <div class="ghost" aria-hidden="true">
@@ -70,7 +83,7 @@
       bind:value={query}
       class="smart-input"
       oninput={(e) => {
-        const val = e.currentTarget.value
+        let val = e.currentTarget.value
         if (!val.startsWith('@') && val.includes('@')) {
           e.currentTarget.value = '@'
           query = '@'
@@ -80,6 +93,18 @@
           query = '?'
           onInput('?')
         } else {
+          if (val.startsWith('?')) {
+            const extracted = []
+            const cleaned = val.replace(/#(\w+)\s/g, (_, tag) => { extracted.push(tag); return '' })
+            if (extracted.length) {
+              for (const tag of extracted) {
+                if (!chips.includes(tag)) onChipAdd?.(tag)
+              }
+              val = cleaned
+              e.currentTarget.value = cleaned
+              query = cleaned
+            }
+          }
           onInput(val)
         }
       }}
@@ -95,11 +120,50 @@
 <style>
   .smartbar {
     width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
   }
 
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 2px 4px 2px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    line-height: 1;
+    flex-shrink: 0;
+    background: var(--emerald);
+    color: var(--bg);
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .chip.unknown {
+    background: var(--pink);
+  }
+
+  .chip-remove {
+    background: none;
+    border: none;
+    padding: 0 0 0 2px;
+    color: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.65;
+    display: flex;
+    align-items: center;
+  }
+
+  .chip-remove:hover { opacity: 1; }
+
   .input-wrap {
+    flex: 1;
+    min-width: 40px;
     position: relative;
-    width: 100%;
     overflow: hidden;
   }
 

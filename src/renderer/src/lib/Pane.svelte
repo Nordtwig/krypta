@@ -3,7 +3,7 @@
   import { getFileIcon } from './fileIcons.js'
   import SmartBar from './SmartBar.svelte'
   import ContextMenu from './ContextMenu.svelte'
-  import { buildIndex, query as runQuery, shortenPath, invalidateCache, highlightSegments } from './search.js'
+  import { buildIndex, query as runQuery, invalidateCache, highlightSegments, isKnownTag, suggestTag } from './search.js'
 
   let {
     currentDir = $bindable(window.krypta.homeDir),
@@ -197,6 +197,7 @@
   let smartBarSearchMode = $derived(showSmartBar && smartBarQuery.startsWith('?'))
 
   let smartBarSearchResults = $state([])
+  let smartBarChips = $state([])
   let _smartBarSearchIndex = null
   let _smartBarIndexBuilding = false
   let smartBarIndexReady = $state(false)
@@ -204,9 +205,9 @@
   $effect(() => {
     if (!smartBarSearchMode) { smartBarSearchResults = []; return }
     const q = smartBarQuery.slice(1)
-    if (!q.trim()) { smartBarSearchResults = []; return }
+    if (!q.trim() && smartBarChips.length === 0) { smartBarSearchResults = []; return }
     if (smartBarIndexReady) {
-      smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir)
+      smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir, smartBarChips)
       return
     }
     if (!_smartBarIndexBuilding) {
@@ -224,8 +225,8 @@
   $effect(() => {
     if (!smartBarIndexReady || !smartBarSearchMode) return
     const q = smartBarQuery.slice(1)
-    if (!q.trim()) { smartBarSearchResults = []; return }
-    smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir)
+    if (!q.trim() && smartBarChips.length === 0) { smartBarSearchResults = []; return }
+    smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir, smartBarChips)
   })
 
   let displayFiles = $derived.by(() => {
@@ -244,7 +245,7 @@
     }
     if (smartBarSearchMode) {
       const q = smartBarQuery.slice(1)
-      if (!q.trim()) {
+      if (!q.trim() && smartBarChips.length === 0) {
         return files.map(f => ({
           name: f.name,
           isDirectory: f.isDirectory,
@@ -287,6 +288,12 @@
   let ghostSuggestion = $derived.by(() => {
     if (!showSmartBar) return ''
     if (smartBarSearchMode) {
+      const q = smartBarQuery.slice(1)
+      const tagMatch = q.match(/#(\w+)$/)
+      if (tagMatch) {
+        const suggestion = suggestTag(tagMatch[1])
+        return suggestion ? suggestion.slice(tagMatch[1].length) : ''
+      }
       if (smartBarQuery !== '?') return ''
       const home = window.krypta.homeDir
       if (currentDir === home) return '~'
@@ -756,6 +763,7 @@
     showSmartBar = false
     smartBarQuery = ''
     smartBarOriginalDir = null
+    smartBarChips = []
   }
 
   async function handleSmartBarInput(query) {
@@ -781,7 +789,19 @@
   }
 
   function handleSmartBarTab() {
-    if (smartBarSearchMode) return
+    if (smartBarSearchMode) {
+      const q = smartBarQuery.slice(1)
+      const tagMatch = q.match(/#(\w+)$/)
+      if (tagMatch) {
+        const suggestion = suggestTag(tagMatch[1])
+        if (suggestion) {
+          if (!smartBarChips.includes(suggestion)) smartBarChips = [...smartBarChips, suggestion]
+          smartBarQuery = '?' + q.slice(0, q.length - tagMatch[0].length).trimEnd()
+          handleSmartBarInput(smartBarQuery)
+        }
+      }
+      return
+    }
     if (smartBarCairnsMode) {
       const filter = smartBarQuery.slice(1).toLowerCase()
       if (!filter) return
@@ -1313,6 +1333,9 @@
         onCancel={cancelSmartBar}
         onArrow={handleSmartBarArrow}
         onTab={handleSmartBarTab}
+        chips={smartBarSearchMode ? smartBarChips : []}
+        onChipAdd={(tag) => { if (!smartBarChips.includes(tag)) smartBarChips = [...smartBarChips, tag] }}
+        onChipRemove={(tag) => { smartBarChips = smartBarChips.filter(t => t !== tag) }}
       />
     {:else}
       <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
@@ -1550,7 +1573,7 @@
             {#if smartBarSearchMode}
               {@const segs = highlightSegments(entry.name, entry.matches)}
               {#if segs}{#each segs as seg}{#if seg.hi}<mark class="name-match">{seg.text}</mark>{:else}{seg.text}{/if}{/each}{:else}{entry.name}{/if}
-              {#if searchResultParent(entry)}<span class="name-path">{shortenPath(searchResultParent(entry))}</span>{/if}
+              {#if searchResultParent(entry)}<span class="name-path">{searchResultParent(entry)}</span>{/if}
             {:else}
               {entry.name}
             {/if}

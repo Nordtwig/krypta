@@ -1,7 +1,7 @@
 <script>
   import { Folder, GripVertical, X, ChevronLeft, Search } from 'lucide-svelte'
   import { getFileIcon } from './fileIcons.js'
-  import { buildIndex, query as runQuery, shortenPath, highlightSegments } from './search.js'
+  import { buildIndex, query as runQuery, highlightSegments, isKnownTag, suggestTag } from './search.js'
 
   let {
     focused = false,
@@ -20,6 +20,7 @@
   } = $props()
 
   let searchInput = $state('')
+  let chips = $state([])
   let results = $state([])
   let loading = $state(false)
   let indexReady = $state(false)
@@ -42,13 +43,22 @@
   })
 
   $effect(() => {
-    if (!indexReady || !searchInput.trim()) { results = []; return }
-    results = runQuery(searchIndex, searchInput, currentDir)
+    if (!indexReady) { results = []; return }
+    if (!searchInput.trim() && chips.length === 0) { results = []; return }
+    results = runQuery(searchIndex, searchInput, currentDir, chips)
     selectedIndex = 0
   })
 
   $effect(() => {
     if (inputEl) inputEl.focus()
+  })
+
+  // Ghost hint for partial #tag at end of input
+  let tagSuggestion = $derived.by(() => {
+    const m = searchInput.match(/#(\w+)$/)
+    if (!m || !m[1]) return ''
+    const s = suggestTag(m[1])
+    return s ? s.slice(m[1].length) : ''
   })
 
   function parentDir(fullPath) {
@@ -71,6 +81,16 @@
     else onNavigate?.(target)
   }
 
+  function commitTagSuggestion() {
+    const m = searchInput.match(/#(\w+)$/)
+    if (!m || !m[1]) return false
+    const suggestion = suggestTag(m[1])
+    if (!suggestion) return false
+    if (!chips.includes(suggestion)) chips = [...chips, suggestion]
+    searchInput = searchInput.slice(0, searchInput.length - m[0].length).trimEnd()
+    return true
+  }
+
   $effect(() => {
     if (!focused) return
     function handleKey(e) {
@@ -81,6 +101,9 @@
         } else if (e.key === 'ArrowUp') {
           e.preventDefault()
           selectedIndex = Math.max(selectedIndex - 1, 0)
+        } else if (e.key === 'Tab') {
+          e.preventDefault()
+          commitTagSuggestion()
         } else if (e.key === 'Enter') {
           e.preventDefault()
           if (results[selectedIndex]) navigate(results[selectedIndex], (e.ctrlKey || e.metaKey) && e.shiftKey, false)
@@ -146,14 +169,47 @@
   <div class="pathbar" class:pane-drag-over={paneDragOver}>
     <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
     <span class="search-icon"><Search size={12} strokeWidth={2} /></span>
-    <input
-      bind:this={inputEl}
-      bind:value={searchInput}
-      class="search-input"
-      placeholder="Search…"
-      spellcheck="false"
-      autocomplete="off"
-    />
+    {#each chips as chip}
+      <span class="chip" class:unknown={!isKnownTag(chip)}>
+        #{chip}<button
+          class="chip-remove"
+          onmousedown={(e) => { e.preventDefault(); chips = chips.filter(t => t !== chip) }}
+        >×</button>
+      </span>
+    {/each}
+    <div class="input-wrap">
+      {#if tagSuggestion}
+        <div class="ghost" aria-hidden="true">
+          <span class="ghost-inner">
+            <span class="ghost-spacer">{searchInput}</span><span class="ghost-hint">{tagSuggestion}</span>
+          </span>
+        </div>
+      {/if}
+      <input
+        bind:this={inputEl}
+        bind:value={searchInput}
+        class="search-input"
+        placeholder="Search…"
+        spellcheck="false"
+        autocomplete="off"
+        oninput={(e) => {
+          let val = e.currentTarget.value
+          const extracted = []
+          const cleaned = val.replace(/#(\w+)\s/g, (_, tag) => { extracted.push(tag); return '' })
+          if (extracted.length) {
+            chips = [...chips, ...extracted.filter(t => !chips.includes(t))]
+            e.currentTarget.value = cleaned
+            searchInput = cleaned
+          }
+        }}
+        onkeydown={(e) => {
+          if (e.key === 'Backspace' && searchInput === '' && chips.length > 0) {
+            e.preventDefault()
+            chips = chips.slice(0, -1)
+          }
+        }}
+      />
+    </div>
     <div class="pane-actions">
       <button class="pane-action-btn" onclick={onAddPane} title="New pane">+</button>
       <span class="pane-actions-sep"></span>
@@ -172,7 +228,7 @@
   <div class="results-list">
     {#if loading}
       <div class="list-notice">indexing…</div>
-    {:else if !searchInput.trim()}
+    {:else if !searchInput.trim() && chips.length === 0}
       <div class="list-notice">type to search home</div>
     {:else if results.length === 0}
       <div class="list-notice">no results</div>
@@ -191,7 +247,7 @@
           </span>
           <span class="result-name">
             {#each highlightSegments(result.name, result.matches) ?? [{ text: result.name, hi: false }] as seg}{#if seg.hi}<mark class="match">{seg.text}</mark>{:else}{seg.text}{/if}{/each}
-            {#if displayParent(result.path)}<span class="result-path-suffix">{shortenPath(displayParent(result.path))}</span>{/if}
+            {#if displayParent(result.path)}<span class="result-path-suffix">{displayParent(result.path)}</span>{/if}
           </span>
         </div>
       {/each}
@@ -249,8 +305,68 @@
     flex-shrink: 0;
   }
 
-  .search-input {
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 2px 4px 2px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    line-height: 1;
+    flex-shrink: 0;
+    background: var(--emerald);
+    color: var(--bg);
+    user-select: none;
+    white-space: nowrap;
+  }
+  .chip.unknown { background: var(--pink); }
+  .chip-remove {
+    background: none;
+    border: none;
+    padding: 0 0 0 2px;
+    color: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.65;
+    display: flex;
+    align-items: center;
+  }
+  .chip-remove:hover { opacity: 1; }
+
+  .input-wrap {
     flex: 1;
+    min-width: 40px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .ghost {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  .ghost-inner {
+    display: inline-block;
+    white-space: pre;
+    font-size: 12px;
+    font-family: inherit;
+  }
+
+  .ghost-spacer { visibility: hidden; }
+
+  .ghost-hint {
+    color: var(--text-dim);
+    opacity: 0.45;
+  }
+
+  .search-input {
+    position: relative;
+    width: 100%;
     min-width: 0;
     background: none;
     border: none;
@@ -259,6 +375,8 @@
     font-size: 12px;
     font-family: inherit;
     padding: 0;
+    caret-color: var(--emerald);
+    z-index: 1;
   }
   .search-input::placeholder { color: var(--text-dim); opacity: 0.5; }
 
@@ -363,12 +481,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .result-path-suffix {
-    font-size: 10.5px;
-    color: var(--text-dim);
-    opacity: 0.5;
-    margin-left: 6px;
-  }
 
   mark.match {
     background: none;
@@ -376,6 +488,12 @@
     font-weight: 600;
   }
 
+  .result-path-suffix {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    opacity: 0.5;
+    margin-left: 6px;
+  }
 
   .pane-footer {
     height: 20px; flex-shrink: 0;
