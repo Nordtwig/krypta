@@ -22,7 +22,7 @@
     onHistory,
     settings = null,
     paneIndex = 0,
-    fileDragState = null,
+    pointerDrag = null,
     onFileDragStart,
     onFileDragEnd,
     onFileDrop,
@@ -141,8 +141,48 @@
   let paneDragOver = $state(false)
   let isDraggingThisPane = $state(false)
   let draggingNames = $derived(
-    fileDragState?.sourceDir === currentDir ? fileDragState.names : new Set()
+    pointerDrag?.sourceDir === currentDir ? pointerDrag.names : new Set()
   )
+
+  // clear all drop state when pointer drag ends
+  $effect(() => {
+    if (!pointerDrag) {
+      dropTargetFolder = null
+      dropOverList = false
+      dropInsertIndex = null
+      dropCrumb = null
+      clearTimeout(folderHoverTimer)
+      clearTimeout(crumbHoverTimer)
+    }
+  })
+
+  // pending drag: tracks a mousedown that may become a drag once threshold is crossed
+  let pendingDrag = null
+
+  function handleRowPointerDown(e, entry) {
+    if (e.button !== 0 || e.shiftKey) return
+    const names = selectedNames.has(entry.name) ? new Set(selectedNames) : new Set([entry.name])
+    pendingDrag = { names, singleIsDir: entry.isDirectory && names.size === 1, startX: e.clientX, startY: e.clientY }
+    document.addEventListener('pointermove', handlePendingMove)
+    document.addEventListener('pointerup', cancelPendingDrag, { once: true })
+  }
+
+  function handlePendingMove(e) {
+    if (!pendingDrag) return
+    const dx = e.clientX - pendingDrag.startX
+    const dy = e.clientY - pendingDrag.startY
+    if (Math.sqrt(dx * dx + dy * dy) > 5) {
+      document.removeEventListener('pointermove', handlePendingMove)
+      document.removeEventListener('pointerup', cancelPendingDrag)
+      onFileDragStart?.(currentDir, pendingDrag.names, pendingDrag.singleIsDir, e.clientX, e.clientY)
+      pendingDrag = null
+    }
+  }
+
+  function cancelPendingDrag() {
+    document.removeEventListener('pointermove', handlePendingMove)
+    pendingDrag = null
+  }
 
   let smartBarFilter = $derived(() => {
     if (!showSmartBar) return ''
@@ -1136,10 +1176,7 @@
   onmouseenter={onFocus}
   style="flex: {flexValue}; --grid-cols: {gridCols}"
   ondragover={(e) => {
-    if (e.dataTransfer.types.includes('application/krypta-files')) {
-      e.preventDefault()
-      e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
-    } else if (!isDraggingThisPane && e.dataTransfer.types.includes('application/krypta-pane')) {
+    if (!isDraggingThisPane && e.dataTransfer.types.includes('application/krypta-pane')) {
       e.preventDefault()
       paneDragOver = true
     }
@@ -1189,39 +1226,26 @@
               class:drop-target={dropCrumb === crumb.path}
               onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { currentDir = crumb.path } }}
               oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}
-              ondragover={(e) => {
-                if (!e.dataTransfer.types.includes('application/krypta-files')) return
-                e.preventDefault()
-                e.stopPropagation()
-                e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
+              onpointerenter={() => {
+                if (!pointerDrag) return
                 if (dropCrumb !== crumb.path) {
                   dropCrumb = crumb.path
                   clearTimeout(crumbHoverTimer)
                   if (settings?.springLoad !== false) {
-                    crumbHoverTimer = setTimeout(() => {
-                      currentDir = crumb.path
-                      dropCrumb = null
-                    }, settings?.springLoadDelay ?? 800)
+                    crumbHoverTimer = setTimeout(() => { currentDir = crumb.path; dropCrumb = null }, settings?.springLoadDelay ?? 800)
                   }
                 }
               }}
-              ondragleave={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget)) {
-                  dropCrumb = null
-                  clearTimeout(crumbHoverTimer)
-                }
+              onpointerleave={() => {
+                if (!pointerDrag) return
+                dropCrumb = null
+                clearTimeout(crumbHoverTimer)
               }}
-              ondrop={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
+              onpointerup={(e) => {
+                if (!pointerDrag) return
                 clearTimeout(crumbHoverTimer)
                 dropCrumb = null
-                if (!e.dataTransfer.types.includes('application/krypta-files')) return
-                const raw = e.dataTransfer.getData('application/krypta-files')
-                if (!raw) return
-                const { sourceDir } = JSON.parse(raw)
-                if (sourceDir === crumb.path) return
-                onFileDrop?.(crumb.path, e.ctrlKey)
+                if (pointerDrag.sourceDir !== crumb.path) onFileDrop?.(crumb.path, e.ctrlKey)
               }}
             >{crumb.name}</button>
           {:else}
@@ -1263,33 +1287,57 @@
         selectedNames = new Set()
       }
     }}
-    ondragover={(e) => {
-      if (!e.dataTransfer.types.includes('application/krypta-files')) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
-      if (!dropTargetFolder) dropOverList = true
-      if (e.target === e.currentTarget) dropInsertIndex = displayFiles.length
-    }}
-    ondragleave={(e) => {
-      if (!e.currentTarget.contains(e.relatedTarget)) {
-        dropOverList = false
-        dropTargetFolder = null
-        dropInsertIndex = null
+    onpointermove={(e) => {
+      if (!pointerDrag) return
+      const row = e.target.closest('[data-entry-name]')
+      if (row) {
+        const name = row.dataset.entryName
+        const isDir = row.dataset.entryIsDir === 'true'
+        if (isDir) {
+          if (dropTargetFolder !== name) {
+            dropTargetFolder = name
+            dropOverList = false
+            dropInsertIndex = null
+            clearTimeout(folderHoverTimer)
+            if (settings?.springLoad !== false) {
+              const navTo = window.krypta.joinPath(currentDir, name)
+              folderHoverTimer = setTimeout(() => { currentDir = navTo; dropTargetFolder = null }, settings?.springLoadDelay ?? 800)
+            }
+          }
+        } else {
+          clearTimeout(folderHoverTimer)
+          dropTargetFolder = null
+          const rect = row.getBoundingClientRect()
+          const idx = parseInt(row.dataset.entryIndex ?? '0')
+          dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? idx : idx + 1
+          dropOverList = true
+        }
+      } else {
         clearTimeout(folderHoverTimer)
+        dropTargetFolder = null
+        dropOverList = true
+        dropInsertIndex = displayFiles.length
       }
     }}
-    ondrop={(e) => {
-      e.preventDefault()
+    onpointerup={(e) => {
+      if (!pointerDrag) return
+      if (dropTargetFolder) {
+        const targetDir = window.krypta.joinPath(currentDir, dropTargetFolder)
+        if (targetDir !== pointerDrag.sourceDir) onFileDrop?.(targetDir, e.ctrlKey)
+      } else if (dropOverList && currentDir !== pointerDrag.sourceDir) {
+        onFileDrop?.(currentDir, e.ctrlKey)
+      }
+      dropTargetFolder = null
+      dropOverList = false
+      dropInsertIndex = null
       clearTimeout(folderHoverTimer)
+    }}
+    onpointerleave={() => {
+      if (!pointerDrag) return
       dropOverList = false
       dropTargetFolder = null
       dropInsertIndex = null
-      if (!e.dataTransfer.types.includes('application/krypta-files')) return
-      const raw = e.dataTransfer.getData('application/krypta-files')
-      if (!raw) return
-      const { sourceDir } = JSON.parse(raw)
-      if (sourceDir === currentDir) return
-      onFileDrop?.(currentDir, e.ctrlKey)
+      clearTimeout(folderHoverTimer)
     }}
   >
     {#if loadError}
@@ -1338,7 +1386,10 @@
         class:carrying={moveMode?.dir === currentDir && moveMode?.names?.has(entry.name)}
         class:dragging={draggingNames.has(entry.name)}
         class:drop-target={dropTargetFolder === entry.name && entry.isDirectory}
-        draggable="true"
+        data-entry-name={entry.name}
+        data-entry-is-dir={entry.isDirectory}
+        data-entry-index={i}
+        onpointerdown={(e) => handleRowPointerDown(e, entry)}
         oncontextmenu={(e) => openContextMenu(e, entry)}
         onclick={(e) => {
           pendingDeleteNames = new Set()
@@ -1360,67 +1411,6 @@
           }
         }}
         ondblclick={() => navigate(entry)}
-        ondragstart={(e) => {
-          const names = selectedNames.has(entry.name)
-            ? new Set(selectedNames)
-            : new Set([entry.name])
-          e.dataTransfer.effectAllowed = 'copyMove'
-          e.dataTransfer.setData('application/krypta-files', JSON.stringify({
-            sourceDir: currentDir,
-            names: [...names]
-          }))
-          onFileDragStart?.(currentDir, names)
-        }}
-        ondragend={() => onFileDragEnd?.()}
-        ondragover={(e) => {
-          if (!e.dataTransfer.types.includes('application/krypta-files')) return
-          if (entry.isDirectory) {
-            e.preventDefault()
-            e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
-            if (dropTargetFolder !== entry.name) {
-              dropTargetFolder = entry.name
-              dropOverList = false
-              dropInsertIndex = null
-              clearTimeout(folderHoverTimer)
-              if (settings?.springLoad !== false) {
-                const navTo = window.krypta.joinPath(currentDir, entry.name)
-                folderHoverTimer = setTimeout(() => {
-                  currentDir = navTo
-                  dropTargetFolder = null
-                }, settings?.springLoadDelay ?? 800)
-              }
-            }
-          } else {
-            if (dropTargetFolder) {
-              dropTargetFolder = null
-              clearTimeout(folderHoverTimer)
-            }
-            const rect = e.currentTarget.getBoundingClientRect()
-            dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? i : i + 1
-          }
-        }}
-        ondragleave={(e) => {
-          if (dropTargetFolder === entry.name && !e.currentTarget.contains(e.relatedTarget)) {
-            dropTargetFolder = null
-            clearTimeout(folderHoverTimer)
-          }
-        }}
-        ondrop={(e) => {
-          if (!entry.isDirectory) return
-          e.preventDefault()
-          e.stopPropagation()
-          clearTimeout(folderHoverTimer)
-          dropTargetFolder = null
-          dropOverList = false
-          dropInsertIndex = null
-          if (!e.dataTransfer.types.includes('application/krypta-files')) return
-          const raw = e.dataTransfer.getData('application/krypta-files')
-          if (!raw) return
-          const { sourceDir } = JSON.parse(raw)
-          const targetDir = window.krypta.joinPath(currentDir, entry.name)
-          if (sourceDir === targetDir) return
-          onFileDrop?.(targetDir, e.ctrlKey)
-        }}
       >
         <span class="col-icon">
           {#if entry.isDirectory}

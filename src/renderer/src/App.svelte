@@ -1,11 +1,12 @@
 <script>
   import { onMount } from 'svelte'
-  import { Folder, Star, SlidersHorizontal, ChevronRight, GripVertical } from 'lucide-svelte'
+  import { Folder, File, Star, SlidersHorizontal, ChevronRight, GripVertical } from 'lucide-svelte'
   import Titlebar from './lib/Titlebar.svelte'
   import Pane from './lib/Pane.svelte'
   import SettingsPane from './lib/SettingsPane.svelte'
   import CairnsPane from './lib/CairnsPane.svelte'
   import KryptaLogo from './lib/KryptaLogo.svelte'
+  import { getFileIcon } from './lib/fileIcons.js'
 
   const COMFORTABLE = 300
   const DEFAULT_WIDTH = 450
@@ -241,7 +242,7 @@
 
   let clipboard = $state(null)   // { dir, names: Set<string>, type: 'cut'|'copy' }
   let moveMode = $state(null)    // { dir, names: Set<string> }
-  let fileDragState = $state(null)  // { sourceDir, names: Set<string> }
+  let pointerDrag = $state(null)  // { sourceDir, names: Set<string>, singleIsDir: bool, x, y }
   let history = $state([])       // [{ type, ...params }]
   let redoStack = $state([])
   let toast = $state(null)
@@ -459,18 +460,20 @@
   function handleCut(dir, names) { clipboard = { dir, names, type: 'cut' } }
   function handleCopy(dir, names) { clipboard = { dir, names, type: 'copy' } }
 
-  function handleFileDragStart(sourceDir, names) {
-    fileDragState = { sourceDir, names }
+  function handleFileDragStart(sourceDir, names, singleIsDir, x, y) {
+    pointerDrag = { sourceDir, names, singleIsDir, x, y }
+    document.body.classList.add('krypta-dragging')
   }
 
   function handleFileDragEnd() {
-    fileDragState = null
+    pointerDrag = null
+    document.body.classList.remove('krypta-dragging')
   }
 
   async function handleFileDrop(targetDir, isCopy) {
-    if (!fileDragState) return
-    const { sourceDir, names } = fileDragState
-    fileDragState = null
+    if (!pointerDrag) return
+    const { sourceDir, names } = pointerDrag
+    handleFileDragEnd()
     if (targetDir === sourceDir) return
     const nameArr = [...names]
     try {
@@ -701,19 +704,14 @@
   })
 
   $effect(() => {
-    const active = !!fileDragState  // sync read → tracked dependency → re-runs when drag starts/stops
-    if (!active) return
-    function onDrag(e) {
-      if (e.dataTransfer.types.includes('application/krypta-files')) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'
-      }
-    }
-    document.addEventListener('dragover', onDrag)
-    document.addEventListener('dragenter', onDrag)
+    if (!pointerDrag) return
+    function onMove(e) { if (pointerDrag) { pointerDrag.x = e.clientX; pointerDrag.y = e.clientY } }
+    function onUp() { handleFileDragEnd() }
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
     return () => {
-      document.removeEventListener('dragover', onDrag)
-      document.removeEventListener('dragenter', onDrag)
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
     }
   })
 
@@ -898,7 +896,7 @@
           onHistory={pushHistory}
           {settings}
           paneIndex={i}
-          {fileDragState}
+          pointerDrag={pointerDrag}
           onFileDragStart={handleFileDragStart}
           onFileDragEnd={handleFileDragEnd}
           onFileDrop={handleFileDrop}
@@ -917,6 +915,15 @@
     {#key toast.id}
       <div class="toast">{toast.message}</div>
     {/key}
+  {/if}
+
+  {#if pointerDrag}
+    {@const ghostName = pointerDrag.names.size === 1 ? [...pointerDrag.names][0] : null}
+    {@const GhostIcon = ghostName ? (pointerDrag.singleIsDir ? Folder : getFileIcon(ghostName)) : File}
+    <div class="drag-ghost" style="left:{pointerDrag.x + 14}px; top:{pointerDrag.y + 10}px">
+      <GhostIcon size={13} color={pointerDrag.singleIsDir ? 'var(--pink)' : 'var(--text-dim)'} strokeWidth={1.5} />
+      <span>{ghostName ?? `${pointerDrag.names.size} items`}</span>
+    </div>
   {/if}
 </div>
 
@@ -1096,5 +1103,27 @@
   @keyframes dot-bounce {
     0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
     40% { transform: translateY(-5px); opacity: 0.8; }
+  }
+
+  .drag-ghost {
+    position: fixed;
+    z-index: 9999;
+    pointer-events: none;
+    background: var(--bg-raised);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 4px;
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+
+  :global(body.krypta-dragging) {
+    cursor: grabbing !important;
+    user-select: none !important;
   }
 </style>

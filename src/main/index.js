@@ -79,6 +79,7 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 })
 
+
 ipcMain.on('close-window', () => win?.close())
 ipcMain.on('minimize-window', () => win?.minimize())
 ipcMain.on('maximize-window', () => win?.isMaximized() ? win.unmaximize() : win.maximize())
