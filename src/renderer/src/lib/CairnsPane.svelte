@@ -13,6 +13,7 @@
     onRemoveCairn,
     onNavigate,
     onOpenInNewPane,
+    onConvertToPane,
     paneIndex = 0,
     onPaneDrop,
     flexValue = 1,
@@ -71,6 +72,12 @@
           break
         case 'Escape':
           selectedIndex = -1
+          break
+        case '/':
+        case '?':
+        case '@':
+          e.preventDefault()
+          onConvertToPane?.(e.key)
           break
       }
     }

@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld('krypta', {
     }))
   },
 
+  searchFiles: (rootDir, opts = {}) => ipcRenderer.invoke('search-files', rootDir, opts),
+
   getRecursiveSize: async (dirPath) => {
     async function walk(p) {
       let total = 0

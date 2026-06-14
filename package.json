@@ -21,6 +21,7 @@
     "esbuild@0.25.12": true
   },
   "dependencies": {
+    "fuse.js": "^7.4.2",
     "lucide-svelte": "^1.0.1"
   }
 }

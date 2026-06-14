@@ -5,6 +5,7 @@
   import Pane from './lib/Pane.svelte'
   import SettingsPane from './lib/SettingsPane.svelte'
   import CairnsPane from './lib/CairnsPane.svelte'
+  import SearchPane from './lib/SearchPane.svelte'
   import KryptaLogo from './lib/KryptaLogo.svelte'
   import { getFileIcon } from './lib/fileIcons.js'
 
@@ -43,6 +44,7 @@
         const collapseState = p.collapsed ? { collapsed: true, collapsedFlex: p.collapsedFlex, collapsedWidth: p.collapsedWidth } : {}
         if (p.type === 'settings') return { type: 'settings', ...collapseState }
         if (p.type === 'cairns') return { type: 'cairns', ...collapseState }
+        if (p.type === 'search') return { type: 'search', ...collapseState }
         let dir = p.dir ?? window.krypta.homeDir
         try { await window.krypta.statPath(dir) } catch { dir = window.krypta.homeDir }
         return { dir, refreshKey: 0, flashKey: 0, ...collapseState }
@@ -66,7 +68,7 @@
     clearTimeout(saveTimer)
     if (settings?.restoreSession === false) return
     const snapshot = panes.map(p => {
-      const base = p.type === 'settings' ? { type: 'settings' } : p.type === 'cairns' ? { type: 'cairns' } : { dir: p.dir }
+      const base = p.type === 'settings' ? { type: 'settings' } : p.type === 'cairns' ? { type: 'cairns' } : p.type === 'search' ? { type: 'search' } : { dir: p.dir }
       return p.collapsed ? { ...base, collapsed: true, collapsedFlex: p.collapsedFlex, collapsedWidth: p.collapsedWidth } : base
     })
     const flexValues = [...paneFlexValues]
@@ -104,6 +106,12 @@
     const existing = panes.findIndex(p => p.type === 'cairns')
     if (existing >= 0) { focusedPane = existing; return }
     addPaneObject(focusedPane, { type: 'cairns' })
+  }
+
+  function openSearch() {
+    const existing = panes.findIndex(p => p.type === 'search')
+    if (existing >= 0) { focusedPane = existing; return }
+    addPaneObject(focusedPane, { type: 'search' })
   }
 
   function handleToggleCairn(dir) {
@@ -739,6 +747,9 @@
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
         e.preventDefault()
         openCairns()
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault()
+        openSearch()
       } else if (e.shiftKey && !e.ctrlKey && !e.metaKey && e.key === 'ArrowLeft' && focusedPane > 0) {
         e.preventDefault()
         ;[panes[focusedPane - 1], panes[focusedPane]] = [panes[focusedPane], panes[focusedPane - 1]]
@@ -797,7 +808,7 @@
         <div class="pane-resizer" onmousedown={(e) => startPaneResize(e, i - 1, i)}></div>
       {/if}
       {#if pane.collapsed}
-        {@const label = pane.type === 'settings' ? 'Settings' : pane.type === 'cairns' ? 'Cairns' : (pane.dir?.split(window.krypta.sep).at(-1) || pane.dir || '')}
+        {@const label = pane.type === 'settings' ? 'Settings' : pane.type === 'cairns' ? 'Cairns' : pane.type === 'search' ? 'Search' : (pane.dir?.split(window.krypta.sep).at(-1) || pane.dir || '')}
         <div
           class="pane-strip"
           class:focused={focusedPane === i}
@@ -856,6 +867,23 @@
           onRemoveCairn={handleRemoveCairn}
           onNavigate={(dir) => { panes = panes.map((p, idx) => idx === i ? { dir, refreshKey: 0, flashKey: 0 } : p) }}
           onOpenInNewPane={(dir, before = false) => addPaneObject(before ? i - 1 : i, { dir, refreshKey: 0, flashKey: 0 })}
+          onConvertToPane={(prefix) => { const dir = panes.find(p => p.dir)?.dir ?? window.krypta.homeDir; panes = panes.map((p, idx) => idx === i ? { dir, startQuery: prefix, refreshKey: 0, flashKey: 0 } : p) }}
+          paneIndex={i}
+          onPaneDrop={handlePaneDrop}
+          flexValue={paneFlexValues[i]}
+        />
+      {:else if pane.type === 'search'}
+        <SearchPane
+          focused={focusedPane === i}
+          onFocus={() => { if (mouseHasMoved && !resizingPanes) focusedPane = i }}
+          onAddPane={() => addPane(i)}
+          onClose={() => removePane(i)}
+          onCollapse={() => collapsePane(i)}
+          grace={gracePanes.has(i)}
+          currentDir={panes.find(p => p.dir)?.dir ?? window.krypta.homeDir}
+          onNavigate={(dir) => { panes = panes.map((p, idx) => idx === i ? { dir, refreshKey: 0, flashKey: 0 } : p) }}
+          onOpenInNewPane={(dir, before = false) => addPaneObject(before ? i - 1 : i, { dir, refreshKey: 0, flashKey: 0 })}
+          onConvertToPane={(prefix) => { const dir = panes.find(p => p.dir)?.dir ?? window.krypta.homeDir; panes = panes.map((p, idx) => idx === i ? { dir, startQuery: prefix, refreshKey: 0, flashKey: 0 } : p) }}
           paneIndex={i}
           onPaneDrop={handlePaneDrop}
           flexValue={paneFlexValues[i]}
@@ -906,6 +934,7 @@
           cairns={settings?.cairns ?? []}
           onToggleCairn={handleToggleCairn}
           flexValue={paneFlexValues[i]}
+          startQuery={pane.startQuery ?? null}
         />
       {/if}
     {/each}

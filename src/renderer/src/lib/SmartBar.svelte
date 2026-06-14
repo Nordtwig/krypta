@@ -75,6 +75,10 @@
           e.currentTarget.value = '@'
           query = '@'
           onInput('@')
+        } else if (!val.startsWith('?') && val.includes('?')) {
+          e.currentTarget.value = '?'
+          query = '?'
+          onInput('?')
         } else {
           onInput(val)
         }

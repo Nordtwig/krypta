@@ -3,6 +3,7 @@
   import { getFileIcon } from './fileIcons.js'
   import SmartBar from './SmartBar.svelte'
   import ContextMenu from './ContextMenu.svelte'
+  import { buildIndex, query as runQuery, shortenPath, invalidateCache, highlightSegments } from './search.js'
 
   let {
     currentDir = $bindable(window.krypta.homeDir),
@@ -35,6 +36,7 @@
     onToggleCairn,
     flexValue = 1,
     grace = false,
+    startQuery = null,
   } = $props()
 
   let files = $state([])
@@ -110,6 +112,7 @@
   })
   let resizing = $state(false)
   let gridCols = $derived.by(() => {
+    if (smartBarSearchMode) return '22px 1fr'
     const shrink = settings?.autoHideColumns === false
     const sizePart = !showSizeCol ? null : shrink ? `minmax(50px, ${sizeColWidth}px)` : `${sizeColWidth}px`
     const datePart = !showDateCol ? null : shrink ? `minmax(60px, ${dateColWidth}px)` : `${dateColWidth}px`
@@ -191,6 +194,39 @@
   })
 
   let smartBarCairnsMode = $derived(showSmartBar && smartBarQuery.startsWith('@'))
+  let smartBarSearchMode = $derived(showSmartBar && smartBarQuery.startsWith('?'))
+
+  let smartBarSearchResults = $state([])
+  let _smartBarSearchIndex = null
+  let _smartBarIndexBuilding = false
+  let smartBarIndexReady = $state(false)
+
+  $effect(() => {
+    if (!smartBarSearchMode) { smartBarSearchResults = []; return }
+    const q = smartBarQuery.slice(1)
+    if (!q.trim()) { smartBarSearchResults = []; return }
+    if (smartBarIndexReady) {
+      smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir)
+      return
+    }
+    if (!_smartBarIndexBuilding) {
+      _smartBarIndexBuilding = true
+      buildIndex(window.krypta.homeDir).then(idx => {
+        _smartBarSearchIndex = idx
+        smartBarIndexReady = true
+      }).catch(err => {
+        console.error('[Pane ?] index build failed:', err)
+        _smartBarIndexBuilding = false
+      })
+    }
+  })
+
+  $effect(() => {
+    if (!smartBarIndexReady || !smartBarSearchMode) return
+    const q = smartBarQuery.slice(1)
+    if (!q.trim()) { smartBarSearchResults = []; return }
+    smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir)
+  })
 
   let displayFiles = $derived.by(() => {
     if (smartBarCairnsMode) {
@@ -205,6 +241,28 @@
           mtime: null,
           itemCount: null,
         }))
+    }
+    if (smartBarSearchMode) {
+      const q = smartBarQuery.slice(1)
+      if (!q.trim()) {
+        return files.map(f => ({
+          name: f.name,
+          isDirectory: f.isDirectory,
+          _searchPath: window.krypta.joinPath(currentDir, f.name),
+          size: null,
+          mtime: null,
+          itemCount: null,
+        }))
+      }
+      return smartBarSearchResults.map(r => ({
+        name: r.name,
+        isDirectory: r.isDirectory,
+        _searchPath: r.path,
+        matches: r.matches,
+        size: null,
+        mtime: null,
+        itemCount: null,
+      }))
     }
     const filter = smartBarFilter()
     const base = (showSmartBar && filter)
@@ -228,6 +286,12 @@
 
   let ghostSuggestion = $derived.by(() => {
     if (!showSmartBar) return ''
+    if (smartBarSearchMode) {
+      if (smartBarQuery !== '?') return ''
+      const home = window.krypta.homeDir
+      if (currentDir === home) return '~'
+      return currentDir.startsWith(home + '/') ? '~' + currentDir.slice(home.length) : currentDir
+    }
     if (smartBarCairnsMode) {
       const filter = smartBarQuery.slice(1).toLowerCase()
       if (!filter) return ''
@@ -368,6 +432,11 @@
   function navigate(entry) {
     if (entry._cairnPath) {
       currentDir = entry._cairnPath
+      if (showSmartBar) closeSmartBar()
+      return
+    }
+    if (entry._searchPath) {
+      currentDir = entry.isDirectory ? entry._searchPath : window.krypta.parentDir(entry._searchPath)
       if (showSmartBar) closeSmartBar()
       return
     }
@@ -625,6 +694,7 @@
     function handleKeyPress(e) {
       if (!focused || showSmartBar || creatingType !== null || renamingName !== null) return
       if (e.key === '@') { e.preventDefault(); openCairnsBar() }
+      if (e.key === '?') { e.preventDefault(); openSearchBar() }
     }
     document.addEventListener('keydown', handleKey)
     document.addEventListener('keypress', handleKeyPress)
@@ -647,6 +717,31 @@
     showSmartBar = true
   }
 
+  function openSearchBar() {
+    smartBarOriginalDir = currentDir
+    smartBarQuery = '?'
+    showSmartBar = true
+  }
+
+  let _startQueryFired = false
+  $effect(() => {
+    if (!startQuery || _startQueryFired) return
+    _startQueryFired = true
+    if (startQuery === '/') openSmartBar()
+    else if (startQuery === '@') openCairnsBar()
+    else if (startQuery === '?') openSearchBar()
+  })
+
+  function searchResultParent(entry) {
+    if (!entry._searchPath) return ''
+    const parent = window.krypta.parentDir(entry._searchPath)
+    const home = window.krypta.homeDir
+    if (parent === currentDir) return '—'
+    if (parent === home) return '~'
+    if (parent.startsWith(home + '/')) return '~' + parent.slice(home.length)
+    return parent
+  }
+
   function closeSmartBar() {
     showSmartBar = false
     smartBarQuery = ''
@@ -654,7 +749,7 @@
   }
 
   function cancelSmartBar() {
-    const filter = smartBarCairnsMode ? '' : smartBarFilter()
+    const filter = (smartBarCairnsMode || smartBarSearchMode) ? '' : smartBarFilter()
     if (filter && smartBarOriginalDir !== null && smartBarOriginalDir !== currentDir) {
       currentDir = smartBarOriginalDir
     }
@@ -667,6 +762,8 @@
     smartBarQuery = query
     if (query.startsWith('@')) return
     if (query.includes('@')) { smartBarQuery = '@'; return }
+    if (query.startsWith('?')) return
+    if (query.includes('?')) { smartBarQuery = '?'; return }
     const lastSlash = query.lastIndexOf('/')
     const dirPart = query.slice(0, lastSlash + 1)
 
@@ -684,6 +781,7 @@
   }
 
   function handleSmartBarTab() {
+    if (smartBarSearchMode) return
     if (smartBarCairnsMode) {
       const filter = smartBarQuery.slice(1).toLowerCase()
       if (!filter) return
@@ -758,6 +856,7 @@
       )
       onHistory?.({ type: 'trash', dir: currentDir, names, keys })
       onChanged?.(currentDir)
+      invalidateCache(window.krypta.homeDir)
     } catch (err) {
       onError?.(`${names.length === 1 ? `Couldn't trash "${names[0]}"` : `Couldn't trash ${names.length} items`} — ${errorReason(err)}`)
     }
@@ -959,6 +1058,7 @@
       pendingSelectName = name
       onHistory?.({ type: 'create', dir: currentDir, name, isDirectory: type === 'folder' })
       onChanged?.(currentDir)
+      invalidateCache(window.krypta.homeDir)
     } catch (err) {
       onError?.(`Couldn't create ${type === 'folder' ? 'folder' : 'file'} "${name}" — ${errorReason(err)}`)
     }
@@ -978,6 +1078,7 @@
       pendingSelectName = newName
       onHistory?.({ type: 'rename', dir: currentDir, oldName, newName })
       onChanged?.(currentDir)
+      invalidateCache(window.krypta.homeDir)
     } catch (err) {
       onError?.(`Couldn't rename "${oldName}" — ${errorReason(err)}`)
     }
@@ -1011,6 +1112,7 @@
       )
       onHistory?.({ type: 'trash', dir: currentDir, names, keys })
       onChanged?.(currentDir)
+      invalidateCache(window.krypta.homeDir)
     } catch (err) {
       onError?.(`${names.length === 1 ? `Couldn't trash "${names[0]}"` : `Couldn't trash ${names.length} items`} — ${errorReason(err)}`)
     }
@@ -1042,6 +1144,7 @@
         const movedNames = [...names]
         onHistory?.({ type: 'move', srcDir: sourceDir, destDir: currentDir, names: movedNames })
         onMoved?.(sourceDir, currentDir, movedNames)
+        invalidateCache(window.krypta.homeDir)
       } else {
         await Promise.all([...names].map(name =>
           window.krypta.copy(
@@ -1051,6 +1154,7 @@
         ))
         onHistory?.({ type: 'copy', srcDir: sourceDir, destDir: currentDir, names: [...names] })
         onChanged?.(currentDir)
+        invalidateCache(window.krypta.homeDir)
       }
     } catch (err) {
       onError?.(`${type === 'cut' ? 'Move' : 'Copy'} failed — ${errorReason(err)}`)
@@ -1261,6 +1365,7 @@
     {/if}
   </div>
 
+  {#if !smartBarSearchMode}
   <div class="file-header">
     <span class="col-icon"></span>
     <span class="col-name col-sort-btn" class:active={sortCol === 'name'} onclick={() => setSort('name')}>Name{#if sortCol === 'name'}<span class="sort-arrow">{sortDir === 'asc' ? '▲' : '▼'}</span>{/if}</span>
@@ -1273,6 +1378,16 @@
       <div class="cols-hidden" title="{hiddenCols.join(', ')} hidden">+{hiddenCols.length}</div>
     {/if}
   </div>
+  {/if}
+  {#if smartBarSearchMode}
+  <div class="search-count-bar">
+    {#if !smartBarIndexReady}
+      <span class="search-count-label">indexing…</span>
+    {:else}
+      <span class="search-count-label">{displayFiles.length} {displayFiles.length === 1 ? 'result' : 'results'}</span>
+    {/if}
+  </div>
+  {/if}
 
   <div
     class="file-list"
@@ -1344,7 +1459,9 @@
       <div class="list-notice error">{loadError}</div>
     {:else if smartBarCairnsMode && displayFiles.length === 0}
       <div class="list-notice">no cairns — press b on a folder</div>
-    {:else if files.length === 0 && creatingType === null}
+    {:else if smartBarSearchMode && smartBarQuery.length > 1 && displayFiles.length === 0}
+      <div class="list-notice">no results</div>
+    {:else if files.length === 0 && creatingType === null && !smartBarSearchMode}
       <div class="list-notice">empty folder</div>
     {/if}
 
@@ -1386,6 +1503,7 @@
         class:carrying={moveMode?.dir === currentDir && moveMode?.names?.has(entry.name)}
         class:dragging={draggingNames.has(entry.name)}
         class:drop-target={dropTargetFolder === entry.name && entry.isDirectory}
+        title={entry._searchPath ?? null}
         data-entry-name={entry.name}
         data-entry-is-dir={entry.isDirectory}
         data-entry-index={i}
@@ -1429,26 +1547,34 @@
               onkeydown={handleRenameKeydown}
             />
           {:else}
-            {entry.name}
+            {#if smartBarSearchMode}
+              {@const segs = highlightSegments(entry.name, entry.matches)}
+              {#if segs}{#each segs as seg}{#if seg.hi}<mark class="name-match">{seg.text}</mark>{:else}{seg.text}{/if}{/each}{:else}{entry.name}{/if}
+              {#if searchResultParent(entry)}<span class="name-path">{shortenPath(searchResultParent(entry))}</span>{/if}
+            {:else}
+              {entry.name}
+            {/if}
           {/if}
         </span>
-        {#if showSizeCol}
-          {#if entry.isDirectory}
-            <span
-              class="col-size dir-size"
-              title="Click to calculate total size"
-              onclick={(e) => { e.stopPropagation(); loadDirSize(entry) }}
-            >{getDirSize(entry)}</span>
-          {:else}
-            <span class="col-size">{formatSize(entry.size, false)}</span>
+        {#if !smartBarSearchMode}
+          {#if showSizeCol}
+            {#if entry.isDirectory}
+              <span
+                class="col-size dir-size"
+                title="Click to calculate total size"
+                onclick={(e) => { e.stopPropagation(); loadDirSize(entry) }}
+              >{getDirSize(entry)}</span>
+            {:else}
+              <span class="col-size">{formatSize(entry.size, false)}</span>
+            {/if}
           {/if}
-        {/if}
-        {#if showDateCol}
-          <span
-            class="col-date"
-            class:expanded={expandedDates.has(entry.name)}
-            onclick={(e) => { e.stopPropagation(); toggleDate(entry.name) }}
-          >{formatDate(entry.mtime, expandedDates.has(entry.name))}</span>
+          {#if showDateCol}
+            <span
+              class="col-date"
+              class:expanded={expandedDates.has(entry.name)}
+              onclick={(e) => { e.stopPropagation(); toggleDate(entry.name) }}
+            >{formatDate(entry.mtime, expandedDates.has(entry.name))}</span>
+          {/if}
         {/if}
       </div>
     {/each}
@@ -1812,6 +1938,36 @@
   }
 
   .col-date:hover { color: var(--text); }
+
+  .name-path {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    opacity: 0.5;
+    margin-left: 6px;
+  }
+
+  .search-count-bar {
+    height: 26px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+  }
+
+  .search-count-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    opacity: 0.4;
+    user-select: none;
+  }
+
+  mark.name-match {
+    background: none;
+    color: var(--emerald);
+    font-weight: 600;
+  }
+
 
   .pane.resizing {
     cursor: col-resize;

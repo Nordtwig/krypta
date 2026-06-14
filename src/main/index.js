@@ -3,6 +3,29 @@ import { join } from 'path'
 import { readdir, rm, mkdir } from 'fs/promises'
 import { homedir } from 'os'
 
+const SEARCH_SKIP_DIRS = new Set([
+  'node_modules', 'dist', 'build', 'out', 'target', '.cache',
+  '__pycache__', 'vendor', '.venv', 'venv', '.next', '.nuxt',
+])
+
+async function walkDir(rootDir, { maxDepth = 6, showHidden = false } = {}) {
+  const results = []
+  async function walk(dir, depth) {
+    if (depth > maxDepth) return
+    let entries
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (!showHidden && e.name.startsWith('.')) continue
+      if (e.isDirectory() && SEARCH_SKIP_DIRS.has(e.name)) continue
+      const fullPath = join(dir, e.name)
+      results.push({ name: e.name, path: fullPath, isDirectory: e.isDirectory() })
+      if (e.isDirectory()) await walk(fullPath, depth + 1)
+    }
+  }
+  await walk(rootDir, 0)
+  return results
+}
+
 const TRASH_FILES = join(homedir(), '.krypta-trash', 'files')
 const TRASH_INFO  = join(homedir(), '.krypta-trash', 'info')
 
@@ -94,3 +117,5 @@ ipcMain.handle('get-window-bounds', () => {
 ipcMain.handle('set-window-bounds', (_, { x, y, width, height }) => {
   win?.setBounds({ x, y, width, height })
 })
+
+ipcMain.handle('search-files', (_, rootDir, opts) => walkDir(rootDir, opts))
