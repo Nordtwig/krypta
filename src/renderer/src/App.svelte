@@ -57,6 +57,8 @@
     } else {
       panes = [loadedSettings.startScreen === 'cairns'
         ? { type: 'cairns' }
+        : loadedSettings.startScreen === 'search'
+        ? { type: 'search' }
         : { dir: window.krypta.homeDir, refreshKey: 0, flashKey: 0 }]
       paneFlexValues = [1]
     }
@@ -96,23 +98,19 @@
     focusedPane = afterIndex + 1
   }
 
-  function openSettings() {
-    const existing = panes.findIndex(p => p.type === 'settings')
+  function openSpecial(type) {
+    const existing = panes.findIndex(p => p.type === type)
     if (existing >= 0) { focusedPane = existing; return }
-    addPaneObject(focusedPane, { type: 'settings' })
+    if (settings.openInNewPane === false) {
+      panes[focusedPane] = { type, _prev: JSON.parse(JSON.stringify(panes[focusedPane])) }
+    } else {
+      addPaneObject(focusedPane, { type })
+    }
   }
 
-  function openCairns() {
-    const existing = panes.findIndex(p => p.type === 'cairns')
-    if (existing >= 0) { focusedPane = existing; return }
-    addPaneObject(focusedPane, { type: 'cairns' })
-  }
-
-  function openSearch() {
-    const existing = panes.findIndex(p => p.type === 'search')
-    if (existing >= 0) { focusedPane = existing; return }
-    addPaneObject(focusedPane, { type: 'search' })
-  }
+  function openSettings() { openSpecial('settings') }
+  function openCairns()   { openSpecial('cairns') }
+  function openSearch()   { openSpecial('search') }
 
   function handleToggleCairn(dir) {
     const cairns = settings?.cairns ?? []
@@ -334,8 +332,9 @@
   }
 
   async function removePane(index) {
-    if (panes.length <= 1) { if (!restoringPane) window.krypta.window.close(); return }
     const pane = panes[index]
+    if (pane?._prev) { panes[index] = pane._prev; return }
+    if (panes.length <= 1) { if (!restoringPane) window.krypta.window.close(); return }
     if (pane && pane.type !== 'settings' && pane.dir) closedPaneHistory.push({ dir: pane.dir, flex: paneFlexValues[index] })
     const wasAllEqual = paneFlexValues.every(v => Math.abs(v - paneFlexValues[0]) < 0.01)
     const removedFlex = paneFlexValues[index]
@@ -789,7 +788,7 @@
 </script>
 
 <div class="app">
-  <Titlebar />
+  <Titlebar onOpenCairns={openCairns} onOpenSearch={openSearch} onOpenSettings={openSettings} />
   <main bind:this={mainEl}>
 
     {#if !sessionLoaded}

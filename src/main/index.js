@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell, screen } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readdir, rm, mkdir } from 'fs/promises'
 import { homedir } from 'os'
@@ -68,17 +69,20 @@ function createWindow() {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    win.webContents.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown') return
-      const isDevTools = input.key === 'F12' ||
-        (input.key === 'I' && input.control && input.shift)
-      if (isDevTools) {
-        win.webContents.toggleDevTools()
-        event.preventDefault()
-      }
-    })
-  }
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    if (input.key === 'I' && input.control && input.shift) {
+      event.preventDefault()
+      win.webContents.executeJavaScript(
+        "(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'I',ctrlKey:true,shiftKey:true,bubbles:true,cancelable:true}))"
+      ).catch(() => {})
+      return
+    }
+    if (process.env['ELECTRON_RENDERER_URL'] && input.key === 'F12') {
+      win.webContents.toggleDevTools()
+      event.preventDefault()
+    }
+  })
   if (!process.env['ELECTRON_RENDERER_URL']) win.once('ready-to-show', () => win.show())
   win.on('closed', () => { win = null })
 }
@@ -86,6 +90,7 @@ function createWindow() {
 app.on('ready', () => {
   flushKryptaTrash()  // fire-and-forget; sweep leftovers from a previous crash
   createWindow()
+  if (!process.env['ELECTRON_RENDERER_URL']) autoUpdater.checkForUpdatesAndNotify().catch(() => {})
 })
 
 app.on('before-quit', async (e) => {
@@ -103,7 +108,9 @@ app.on('activate', () => {
 })
 
 
+ipcMain.on('get-user-data-path', (e) => { e.returnValue = app.getPath('userData') })
 ipcMain.on('close-window', () => win?.close())
+ipcMain.handle('set-always-on-top', (_, value) => { win?.setAlwaysOnTop(value, 'floating') })
 ipcMain.on('minimize-window', () => win?.minimize())
 ipcMain.on('maximize-window', () => win?.isMaximized() ? win.unmaximize() : win.maximize())
 

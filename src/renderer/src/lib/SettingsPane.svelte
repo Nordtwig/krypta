@@ -11,6 +11,7 @@
     restoreSession:    true,
     startScreen:       'home',
     autoExpandPanes:   true,
+    openInNewPane:     true,
     copyAllPaths:      false,
   }
 
@@ -124,8 +125,9 @@
       { type: 'toggle', id: 'showCreateBtn',   label: 'Quick-create button',       value: settings.showCreateBtn !== false,  default: DEFAULTS.showCreateBtn },
       { type: 'toggle', id: 'showHidden',      label: 'Show hidden files',          value: settings.showHidden === true,      default: DEFAULTS.showHidden },
       { type: 'toggle', id: 'restoreSession',  label: 'Restore session on launch',  value: settings.restoreSession !== false,  default: DEFAULTS.restoreSession },
-      { type: 'select', id: 'startScreen', label: 'Start with', value: settings.startScreen ?? DEFAULTS.startScreen, default: DEFAULTS.startScreen, disabled: settings.restoreSession !== false, sub: true, options: [{ value: 'home', label: 'Home directory' }, { value: 'cairns', label: 'Cairns' }] },
+      { type: 'select', id: 'startScreen', label: 'Start with', value: settings.startScreen ?? DEFAULTS.startScreen, default: DEFAULTS.startScreen, disabled: settings.restoreSession !== false, sub: true, options: [{ value: 'home', label: 'Home directory' }, { value: 'cairns', label: 'Cairns' }, { value: 'search', label: 'Search' }] },
       { type: 'toggle', id: 'autoExpandPanes', label: 'Expand window for new panes', value: settings.autoExpandPanes !== false, default: DEFAULTS.autoExpandPanes },
+      { type: 'toggle', id: 'openInNewPane',   label: 'Open Cairns, Settings and Search in new pane', value: settings.openInNewPane !== false, default: DEFAULTS.openInNewPane },
       { type: 'toggle', id: 'copyAllPaths',    label: 'Copy all paths on multi-select', value: settings.copyAllPaths === true, default: DEFAULTS.copyAllPaths },
     ]
     return []

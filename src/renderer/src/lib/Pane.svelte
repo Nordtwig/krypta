@@ -40,6 +40,8 @@
   } = $props()
 
   let files = $state([])
+  let badges = $state({})
+  let gitInfo = $state(null)
   let selectedIndex = $state(0)
   let keyboardActive = $state(false)
   let hoveredIndex = $state(-1)
@@ -56,7 +58,19 @@
   let pendingDeleteNames = $state(new Set())
   let contextMenu = $state(null)
   let showScry = $state(false)
+  let scryChildrenEl = $state(null)
   let scryEntry = $state(null)
+
+  $effect(() => {
+    if (!showScry) return
+    function handleScryKey(e) {
+      const step = e.ctrlKey ? 5 * 26 : 26
+      if (e.key === 'ArrowDown') { e.stopPropagation(); e.preventDefault(); scryChildrenEl?.scrollBy({ top: step }) }
+      if (e.key === 'ArrowUp')   { e.stopPropagation(); e.preventDefault(); scryChildrenEl?.scrollBy({ top: -step }) }
+    }
+    document.addEventListener('keydown', handleScryKey, true)
+    return () => document.removeEventListener('keydown', handleScryKey, true)
+  })
   let scryData = $state(null)
   let scryLoading = $state(false)
   let scryAnchorY = $state(null)
@@ -341,6 +355,14 @@
   let breadcrumbs = $derived(getBreadcrumbs(currentDir))
 
   $effect(() => {
+    const dir = currentDir
+    gitInfo = null
+    window.krypta.getGitInfo(dir).then(info => {
+      if (currentDir === dir) gitInfo = info
+    }).catch(() => {})
+  })
+
+  $effect(() => {
     currentDir
     if (breadcrumbsEl) breadcrumbsEl.scrollLeft = breadcrumbsEl.scrollWidth
   })
@@ -376,6 +398,7 @@
       selectedNames = new Set([...selectedNames].filter(n => newNames.has(n)))
       const idx = prevName ? newFiles.findIndex(f => f.name === prevName) : -1
       if (idx >= 0) selectedIndex = idx
+      scanBadges(currentDir, newFiles)
     } catch { /* silent — don't disrupt UI on background refresh */ }
   }
 
@@ -397,6 +420,20 @@
     return () => clearInterval(id)
   })
 
+  function scanBadges(dir, fileList) {
+    badges = {}
+    const dirNames = fileList.filter(f => f.isDirectory).map(f => f.name)
+    if (!dirNames.length) return
+    window.krypta.checkMarkers(dir, dirNames).then(results => {
+      if (currentDir !== dir) return
+      const map = {}
+      for (const r of results) {
+        if (r.markers.length) map[r.name] = r.markers
+      }
+      badges = map
+    }).catch(() => {})
+  }
+
   async function loadFiles(dir) {
     try {
       files = await window.krypta.readDir(dir, { showHidden: settings?.showHidden === true })
@@ -413,6 +450,7 @@
       expandedDates = new Set()
       selectedNames = new Set()
       pendingDeleteNames = new Set()
+      scanBadges(dir, files)
     } catch (err) {
       files = []
       loadError = errorReason(err)
@@ -631,8 +669,23 @@
           onToggleCairn?.(cairnTarget)
           break
         }
-        case 'i':
-        case 'p': {
+        case 'I': {
+          if (e.ctrlKey && e.shiftKey) {
+            e.preventDefault()
+            if (showScry) { closeScry(); break }
+            const activeIdx = hoveredIndex >= 0 ? hoveredIndex : selectedIndex
+            const scryEntry = displayFiles[activeIdx]
+            if (scryEntry) {
+              const offset = creatingType !== null ? 1 : 0
+              const row = fileListEl?.children[activeIdx + offset]
+              const paneRect = paneEl?.getBoundingClientRect()
+              const rowRect = row?.getBoundingClientRect()
+              openScry(scryEntry, (rowRect && paneRect) ? rowRect.top - paneRect.top : null)
+            }
+          }
+          break
+        }
+        case 'i': {
           if (e.ctrlKey || e.metaKey) break
           e.preventDefault()
           if (showScry) { closeScry(); break }
@@ -1333,6 +1386,17 @@
         onCancel={cancelSmartBar}
         onArrow={handleSmartBarArrow}
         onTab={handleSmartBarTab}
+        onScry={() => {
+          if (showScry) { closeScry(); return }
+          const activeIdx = hoveredIndex >= 0 ? hoveredIndex : selectedIndex
+          const entry = displayFiles[activeIdx]
+          if (!entry) return
+          const offset = creatingType !== null ? 1 : 0
+          const row = fileListEl?.children[activeIdx + offset]
+          const paneRect = paneEl?.getBoundingClientRect()
+          const rowRect = row?.getBoundingClientRect()
+          openScry(entry, (rowRect && paneRect) ? rowRect.top - paneRect.top : null)
+        }}
         chips={smartBarSearchMode ? smartBarChips : []}
         onChipAdd={(tag) => { if (!smartBarChips.includes(tag)) smartBarChips = [...smartBarChips, tag] }}
         onChipRemove={(tag) => { smartBarChips = smartBarChips.filter(t => t !== tag) }}
@@ -1350,6 +1414,7 @@
           {#if i < breadcrumbs.length - 1}
             <button
               class="crumb"
+              class:git-dir={gitInfo && (crumb.path === gitInfo.root || crumb.path.startsWith(gitInfo.root + '/'))}
               class:drop-target={dropCrumb === crumb.path}
               onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { currentDir = crumb.path } }}
               oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}
@@ -1376,10 +1441,13 @@
               }}
             >{crumb.name}</button>
           {:else}
-            <button class="crumb" onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
+            <button class="crumb" class:git-dir={gitInfo && (crumb.path === gitInfo.root || crumb.path.startsWith(gitInfo.root + '/'))} onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
           {/if}
         {/each}
       </div>
+      {#if gitInfo}
+        <span class="git-badge" title="Git repo: {gitInfo.root}">⎇ {gitInfo.branch}</span>
+      {/if}
       <div class="pane-actions">
         <button class="pane-action-btn" onclick={onAddPane} title="New pane">+</button>
         <span class="pane-actions-sep"></span>
@@ -1554,12 +1622,20 @@
         ondblclick={() => navigate(entry)}
       >
         <span class="col-icon">
-          {#if entry.isDirectory}
-            <Folder size={14} color="var(--pink)" strokeWidth={1.5} />
-          {:else}
-            {@const FileIcon = getFileIcon(entry.name)}
-            <FileIcon size={14} color="var(--text-dim)" strokeWidth={1.5} />
-          {/if}
+          <span class="icon-wrap">
+            {#if entry.isDirectory}
+              <Folder size={14} color="var(--pink)" strokeWidth={1.5} />
+            {:else}
+              {@const FileIcon = getFileIcon(entry.name)}
+              <FileIcon size={14} color="var(--text-dim)" strokeWidth={1.5} />
+            {/if}
+            {#if entry.isDirectory && badges[entry.name]?.length}
+              {#each badges[entry.name] as badge}
+                {@const LABELS = { git: 'G', obsidian: 'O', onedrive: 'O', dropbox: 'D' }}
+                <span class="badge badge-{badge}" title={badge}>{LABELS[badge] ?? badge[0].toUpperCase()}</span>
+              {/each}
+            {/if}
+          </span>
         </span>
         <span class="col-name">
           {#if renamingName === entry.name}
@@ -1626,7 +1702,7 @@
           <div class="scry-loading">scrying…</div>
         {:else}
           {#if scryData.isDirectory}
-            <div class="scry-children">
+            <div class="scry-children" bind:this={scryChildrenEl}>
               {#if scryData.children.length === 0}
                 <div class="scry-empty">empty folder</div>
               {:else}
@@ -1922,6 +1998,37 @@
     display: flex;
     align-items: center;
   }
+
+  .crumb.git-dir { color: #F05032; }
+
+  .git-badge {
+    font-size: 9px;
+    color: #F05032;
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 0 6px 0 3px;
+    opacity: 0.8;
+    user-select: none;
+  }
+
+  .icon-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .badge {
+    position: absolute;
+    font-size: 8px;
+    font-weight: 900;
+    line-height: 1;
+    user-select: none;
+  }
+
+  .badge-git      { color: #F05032; bottom: -1px; right: -2px; }
+  .badge-obsidian { color: #7C3AED; bottom: -1px; left:  -2px; }
+  .badge-onedrive { color: #0078D4; top:    -5px; right: -2px; }
+  .badge-dropbox  { color: #0061FF; top:    -5px; left:  -2px; }
 
   .col-name {
     font-size: 13px;

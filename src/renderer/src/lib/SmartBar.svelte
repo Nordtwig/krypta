@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { isKnownTag } from './search.js'
 
-  let { query = $bindable(), placeholder = '', onInput, onSubmit, onCancel, onArrow, onTab, ghostSuffix = '', chips = [], onChipAdd, onChipRemove } = $props()
+  let { query = $bindable(), placeholder = '', onInput, onSubmit, onCancel, onArrow, onTab, onScry, ghostSuffix = '', chips = [], onChipAdd, onChipRemove } = $props()
 
   let inputEl = $state(null)
   let ghostInnerEl = $state(null)
@@ -57,6 +57,10 @@
       e.preventDefault()
       e.stopPropagation()
       onArrow?.(-1)
+    } else if (e.key === 'I' && e.shiftKey && e.ctrlKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      onScry?.()
     }
   }
 </script>

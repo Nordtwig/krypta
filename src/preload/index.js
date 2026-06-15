@@ -10,7 +10,7 @@ const TRASH_DIR = join(homedir(), '.krypta-trash')
 const TRASH_FILES = join(TRASH_DIR, 'files')
 const TRASH_INFO  = join(TRASH_DIR, 'info')
 
-const CONFIG_DIR    = join(homedir(), '.config', 'krypta')
+const CONFIG_DIR    = ipcRenderer.sendSync('get-user-data-path')
 const CONFIG_FILE   = join(CONFIG_DIR, 'settings.json')
 const SESSION_FILE  = join(CONFIG_DIR, 'session.json')
 const DEFAULT_SETTINGS = { useKryptaTrash: true, customCommands: [] }
@@ -213,10 +213,36 @@ contextBridge.exposeInMainWorld('krypta', {
     } catch {}
   },
 
+  getGitInfo: async (dirPath) => {
+    let dir = dirPath
+    while (true) {
+      try {
+        await stat(join(dir, '.git'))
+        const head = await readFile(join(dir, '.git', 'HEAD'), 'utf8')
+        const match = head.trim().match(/^ref: refs\/heads\/(.+)$/)
+        const branch = match ? match[1] : head.trim().slice(0, 7)
+        return { root: dir, branch }
+      } catch {
+        const parent = dirname(dir)
+        if (parent === dir) return null
+        dir = parent
+      }
+    }
+  },
+
+  checkMarkers: async (parentPath, dirNames) => {
+    return Promise.all(dirNames.map(async name => {
+      const markers = []
+      try { await stat(join(parentPath, name, '.git')); markers.push('git') } catch {}
+      return { name, markers }
+    }))
+  },
+
   window: {
     close: () => ipcRenderer.send('close-window'),
     minimize: () => ipcRenderer.send('minimize-window'),
     maximize: () => ipcRenderer.send('maximize-window'),
+    setAlwaysOnTop: (value) => ipcRenderer.invoke('set-always-on-top', value),
     getBounds: () => ipcRenderer.invoke('get-window-bounds'),
     setBounds: (bounds) => ipcRenderer.invoke('set-window-bounds', bounds),
   }
