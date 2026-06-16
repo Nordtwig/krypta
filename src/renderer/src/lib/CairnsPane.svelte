@@ -1,6 +1,7 @@
 <script>
   import { Folder, GripVertical, X, ChevronLeft } from 'lucide-svelte'
   import ContextMenu from './ContextMenu.svelte'
+  import { baseName } from './paths.js'
 
   let {
     focused = false,
@@ -30,12 +31,7 @@
   })
 
   function entryName(path) {
-    return path.split('/').filter(Boolean).at(-1) ?? path
-  }
-
-  function entryParent(path) {
-    const parts = path.split('/').filter(Boolean)
-    return parts.length <= 1 ? '/' : '/' + parts.slice(0, -1).join('/')
+    return baseName(path)
   }
 
   $effect(() => {

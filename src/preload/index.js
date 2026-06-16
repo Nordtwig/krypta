@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { readdir, stat, rename, mkdir, writeFile, rm, cp, readFile } from 'fs/promises'
-import { writeFileSync, mkdirSync } from 'fs'
+import { writeFileSync, mkdirSync, readFileSync } from 'fs'
 import { join, basename, dirname, sep } from 'path'
 import { homedir, platform } from 'os'
 import { shell } from 'electron'
@@ -20,6 +20,22 @@ async function ensureTrashDirs() {
   await mkdir(TRASH_INFO,  { recursive: true })
 }
 
+// Windows hides files via the Hidden attribute, not a dot-prefix. `dir /a:h /b`
+// is a fast cmd builtin that lists (bare) the names carrying that attribute —
+// no native module, one spawn per directory. Empty set on other platforms.
+function getHiddenNames(dirPath) {
+  return new Promise((resolve) => {
+    if (platform() !== 'win32') return resolve(new Set())
+    const child = spawn(`dir /a:h /b "${dirPath}"`, { shell: true, windowsHide: true })
+    let out = ''
+    child.stdout?.on('data', d => { out += d })
+    child.on('error', () => resolve(new Set()))
+    child.on('close', () => {
+      resolve(new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)))
+    })
+  })
+}
+
 contextBridge.exposeInMainWorld('krypta', {
   homeDir: homedir(),
   sep,
@@ -27,8 +43,9 @@ contextBridge.exposeInMainWorld('krypta', {
 
   readDir: async (dirPath, { showHidden = false } = {}) => {
     const entries = await readdir(dirPath, { withFileTypes: true })
+    const hidden = showHidden ? null : await getHiddenNames(dirPath)
     const filtered = entries
-      .filter(e => showHidden || !e.name.startsWith('.'))
+      .filter(e => showHidden || (!e.name.startsWith('.') && !hidden.has(e.name)))
       .sort((a, b) => {
         if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
         return a.name.localeCompare(b.name)
@@ -135,35 +152,73 @@ contextBridge.exposeInMainWorld('krypta', {
   },
 
   openTerminal: (dirPath) => {
+    // User-declared terminal command (Settings → General) wins. {dir} → target path.
+    let custom = ''
+    try {
+      const s = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
+      if (typeof s?.terminalCommand === 'string') custom = s.terminalCommand.trim()
+    } catch {}
+    if (custom) {
+      spawn(custom.replace(/\{dir\}/g, dirPath), { cwd: dirPath, shell: true, detached: true, stdio: 'ignore' }).unref()
+      return
+    }
     if (process.env.TERMINAL) {
       spawn(process.env.TERMINAL, [], { cwd: dirPath, detached: true, stdio: 'ignore' }).unref()
       return
     }
-    const candidates = [
-      ['wezterm', ['start', '--cwd', dirPath]],
-      ['alacritty', ['--working-directory', dirPath]],
-      ['kitty', ['--directory', dirPath]],
-      ['gnome-terminal', [`--working-directory=${dirPath}`]],
-      ['xfce4-terminal', [`--working-directory=${dirPath}`]],
-      ['konsole', ['--workdir', dirPath]],
-      ['xterm', ['-e', `cd '${dirPath}' && exec $SHELL`]],
-    ]
+    const candidates = platform() === 'win32'
+      ? [
+          ['wt.exe', ['-d', dirPath]],                       // Windows Terminal
+          ['powershell.exe', ['-NoExit', '-Command', `Set-Location -LiteralPath '${dirPath.replace(/'/g, "''")}'`]],
+          ['cmd.exe', ['/K', `cd /d "${dirPath}"`]],
+        ]
+      : platform() === 'darwin'
+      ? [
+          ['open', ['-a', 'Terminal', dirPath]],
+        ]
+      : [
+          ['wezterm', ['start', '--cwd', dirPath]],
+          ['alacritty', ['--working-directory', dirPath]],
+          ['kitty', ['--directory', dirPath]],
+          ['gnome-terminal', [`--working-directory=${dirPath}`]],
+          ['xfce4-terminal', [`--working-directory=${dirPath}`]],
+          ['konsole', ['--workdir', dirPath]],
+          ['xterm', ['-e', `cd '${dirPath}' && exec $SHELL`]],
+        ]
     function tryNext(i) {
       if (i >= candidates.length) return
       const [cmd, args] = candidates[i]
-      const child = spawn(cmd, args, { detached: true, stdio: 'ignore' })
+      const child = spawn(cmd, args, { cwd: dirPath, detached: true, stdio: 'ignore' })
       child.on('error', () => tryNext(i + 1))
       child.unref()
     }
     tryNext(0)
   },
 
-  // Krypta soft-delete: moves to ~/.krypta-trash/, returns a key for undo
+  // Windows: list available drive roots (C:\, D:\, …). Empty on other platforms.
+  listDrives: async () => {
+    if (platform() !== 'win32') return []
+    const drives = []
+    for (let c = 67; c <= 90; c++) {  // C..Z — skip A:/B: to avoid empty-floppy probes
+      const root = `${String.fromCharCode(c)}:\\`
+      try {
+        await stat(root)
+        drives.push(root)
+      } catch {}
+    }
+    return drives
+  },
+
+  // Krypta soft-delete: moves to ~/.krypta-trash/<key>/<originalName>, returns a key for undo.
+  // The item keeps its original name inside a uniquely-keyed subfolder so that, when later
+  // flushed to the OS trash, the Recycle Bin shows the real name (not a timestamped key).
   kryptaTrash: async (filePath) => {
     await ensureTrashDirs()
     const name = basename(filePath)
     const key = `${name}-${Date.now()}`
-    const dest = join(TRASH_FILES, key)
+    const keyDir = join(TRASH_FILES, key)
+    await mkdir(keyDir, { recursive: true })
+    const dest = join(keyDir, name)
     try {
       await rename(filePath, dest)
     } catch (e) {
@@ -185,33 +240,25 @@ contextBridge.exposeInMainWorld('krypta', {
   kryptaRestore: async (key) => {
     const infoPath = join(TRASH_INFO, `${key}.json`)
     const { originalPath } = JSON.parse(await readFile(infoPath, 'utf8'))
+    const src = join(TRASH_FILES, key, basename(originalPath))
     await mkdir(dirname(originalPath), { recursive: true })
     try {
-      await rename(join(TRASH_FILES, key), originalPath)
+      await rename(src, originalPath)
     } catch (e) {
       if (e.code === 'EXDEV') {
-        await cp(join(TRASH_FILES, key), originalPath, { recursive: true })
-        await rm(join(TRASH_FILES, key), { recursive: true })
+        await cp(src, originalPath, { recursive: true })
+        await rm(src, { recursive: true })
       } else {
         throw e
       }
     }
+    await rm(join(TRASH_FILES, key), { recursive: true }).catch(() => {})
     await rm(infoPath)
   },
 
-  // Move all remaining krypta trash items to OS trash (called on exit and startup)
-  flushKryptaTrash: async () => {
-    try {
-      await ensureTrashDirs()
-      const keys = await readdir(TRASH_FILES)
-      await Promise.all(keys.map(async key => {
-        try {
-          await shell.trashItem(join(TRASH_FILES, key))
-          await rm(join(TRASH_INFO, `${key}.json`)).catch(() => {})
-        } catch {}
-      }))
-    } catch {}
-  },
+  // Move all remaining krypta trash items to OS trash. Runs in the main process —
+  // shell.trashItem is unreliable from the renderer/preload context.
+  flushKryptaTrash: () => ipcRenderer.invoke('flush-krypta-trash'),
 
   getGitInfo: async (dirPath) => {
     let dir = dirPath

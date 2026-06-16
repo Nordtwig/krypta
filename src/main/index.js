@@ -1,12 +1,13 @@
 import { app, BrowserWindow, ipcMain, shell, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
-import { readdir, rm, mkdir } from 'fs/promises'
+import { readdir, rm, mkdir, stat } from 'fs/promises'
 import { homedir } from 'os'
 
 const SEARCH_SKIP_DIRS = new Set([
   'node_modules', 'dist', 'build', 'out', 'target', '.cache',
   '__pycache__', 'vendor', '.venv', 'venv', '.next', '.nuxt',
+  '$Recycle.Bin', 'System Volume Information', '$RECYCLE.BIN',
 ])
 
 async function walkDir(rootDir, { maxDepth = 6, showHidden = false } = {}) {
@@ -37,7 +38,16 @@ async function flushKryptaTrash() {
     const keys = await readdir(TRASH_FILES)
     await Promise.all(keys.map(async key => {
       try {
-        await shell.trashItem(join(TRASH_FILES, key))
+        const keyPath = join(TRASH_FILES, key)
+        const s = await stat(keyPath)
+        if (s.isDirectory()) {
+          for (const name of await readdir(keyPath)) {
+            await shell.trashItem(join(keyPath, name))
+          }
+          await rm(keyPath, { recursive: true }).catch(() => {})
+        } else {
+          await shell.trashItem(keyPath)  // legacy flat entry
+        }
         await rm(join(TRASH_INFO, `${key}.json`)).catch(() => {})
       } catch {}
     }))
@@ -126,3 +136,4 @@ ipcMain.handle('set-window-bounds', (_, { x, y, width, height }) => {
 })
 
 ipcMain.handle('search-files', (_, rootDir, opts) => walkDir(rootDir, opts))
+ipcMain.handle('flush-krypta-trash', () => flushKryptaTrash())

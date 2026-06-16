@@ -8,6 +8,7 @@
   import SearchPane from './lib/SearchPane.svelte'
   import KryptaLogo from './lib/KryptaLogo.svelte'
   import { getFileIcon } from './lib/fileIcons.js'
+  import { isUnder } from './lib/paths.js'
 
   const COMFORTABLE = 300
   const DEFAULT_WIDTH = 450
@@ -565,7 +566,7 @@
       if (panes[i].type) return
       for (const name of names) {
         const oldBase = window.krypta.joinPath(srcDir, name)
-        if (panes[i].dir === oldBase || panes[i].dir.startsWith(oldBase + '/')) {
+        if (isUnder(panes[i].dir, oldBase)) {
           const newBase = window.krypta.joinPath(destDir, name)
           panes[i].dir = newBase + panes[i].dir.slice(oldBase.length)
           panes[i].refreshKey++

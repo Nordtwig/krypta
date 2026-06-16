@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import { isKnownTag } from './search.js'
+  import { sep, lastSepIndex } from './paths.js'
 
   let { query = $bindable(), placeholder = '', onInput, onSubmit, onCancel, onArrow, onTab, onScry, ghostSuffix = '', chips = [], onChipAdd, onChipRemove } = $props()
 
@@ -37,12 +38,12 @@
         e.preventDefault()
         e.stopPropagation()
         onChipRemove?.(chips.at(-1))
-      } else if (atEnd && query.endsWith('/') && query.length > 1) {
+      } else if (atEnd && (query.endsWith('/') || query.endsWith('\\')) && query.length > 1) {
         e.preventDefault()
         e.stopPropagation()
         const stripped = query.slice(0, -1)
-        const prev = stripped.lastIndexOf('/')
-        query = prev >= 0 ? query.slice(0, prev + 1) : '/'
+        const prev = lastSepIndex(stripped)
+        query = prev >= 0 ? query.slice(0, prev + 1) : sep
         onInput(query)
       }
     } else if (e.key === 'Enter') {

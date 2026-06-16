@@ -13,6 +13,7 @@
     autoExpandPanes:   true,
     openInNewPane:     true,
     copyAllPaths:      false,
+    terminalCommand:   '',
   }
 
   let { focused = false, onFocus, onAddPane, onClose, onCollapse, settings, onSettingsChange, paneIndex = 0, onPaneDrop, flexValue = 1, grace = false } = $props()
@@ -27,6 +28,7 @@
   let editField = $state('label')
   let labelInputEl = $state(null)
   let commandInputEl = $state(null)
+  let textInputEl = $state(null)
 
   const rootSections = [
     { type: 'section', id: 'trash',    label: 'Trash',              icon: Trash2 },
@@ -129,6 +131,7 @@
       { type: 'toggle', id: 'autoExpandPanes', label: 'Expand window for new panes', value: settings.autoExpandPanes !== false, default: DEFAULTS.autoExpandPanes },
       { type: 'toggle', id: 'openInNewPane',   label: 'Open Cairns, Settings and Search in new pane', value: settings.openInNewPane !== false, default: DEFAULTS.openInNewPane },
       { type: 'toggle', id: 'copyAllPaths',    label: 'Copy all paths on multi-select', value: settings.copyAllPaths === true, default: DEFAULTS.copyAllPaths },
+      { type: 'text',   id: 'terminalCommand', label: 'Terminal command', value: settings.terminalCommand ?? DEFAULTS.terminalCommand, default: DEFAULTS.terminalCommand, placeholder: 'auto — e.g. wezterm start --cwd {dir}' },
     ]
     return []
   })
@@ -160,6 +163,9 @@
         break
       case 'add':
         addCommand()
+        break
+      case 'text':
+        textInputEl?.focus()
         break
     }
   }
@@ -482,6 +488,33 @@
             {/if}
             {row.options.find(o => o.value === row.value)?.label ?? row.value}
           </span>
+        </div>
+
+      {:else if row.type === 'text'}
+        <div
+          class="row text-row"
+          class:selected={i === selectedIndex}
+          onclick={() => { selectedIndex = i }}
+          onmouseenter={() => selectedIndex = i}
+        >
+          <span class="cell-icon"></span>
+          <span class="cell-label">{row.label}</span>
+          <div class="text-control" onclick={(e) => e.stopPropagation()}>
+            {#if row.default !== undefined && row.value !== row.default}
+              <button class="reset-btn" onclick={(e) => { e.stopPropagation(); resetToDefault(row) }} title="Reset to default">
+                <RotateCcw size={9} color="currentColor" strokeWidth={2.5} />
+              </button>
+            {/if}
+            <input
+              bind:this={textInputEl}
+              class="text-input mono"
+              value={row.value}
+              placeholder={row.placeholder}
+              spellcheck="false"
+              onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.currentTarget.blur() }}
+              onchange={(e) => onSettingsChange({ ...settings, [row.id]: e.currentTarget.value.trim() })}
+            />
+          </div>
         </div>
       {/if}
     {/each}
@@ -817,6 +850,31 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+
+  .text-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 4px;
+  }
+
+  .text-input {
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    outline: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    width: 200px;
+    max-width: 40vw;
+    padding: 1px 2px;
+    caret-color: var(--emerald);
+    text-align: right;
+  }
+  .text-input.mono { font-family: monospace; font-size: 10px; }
+  .text-input:focus { border-bottom-color: rgba(212, 96, 110, 0.6); text-align: left; }
+  .text-input::placeholder { color: var(--text-dim); opacity: 0.4; }
 
   .row.disabled .cell-label,
   .row.disabled .range-value { opacity: 0.35; }
