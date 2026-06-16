@@ -2,6 +2,7 @@
   import { Folder, GripVertical, X, ChevronLeft, Search } from 'lucide-svelte'
   import { getFileIcon } from './fileIcons.js'
   import { buildIndex, query as runQuery, highlightSegments, isKnownTag, suggestTag } from './search.js'
+  import { relHome } from './paths.js'
 
   let {
     focused = false,
@@ -175,14 +176,8 @@
     return window.krypta.parentDir(fullPath)
   }
 
-  function relPath(fullPath) {
-    const home = window.krypta.homeDir
-    if (fullPath === home) return '~'
-    return fullPath.startsWith(home + '/') ? '~' + fullPath.slice(home.length) : fullPath
-  }
-
   function displayParent(fullPath) {
-    return relPath(parentDir(fullPath))
+    return relHome(parentDir(fullPath))
   }
 
   function navigate(result, newPane = false, left = false) {

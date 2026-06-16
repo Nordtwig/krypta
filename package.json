@@ -23,7 +23,8 @@
       "output": "dist"
     },
     "files": [
-      "out/**"
+      "out/**",
+      "resources/icons/32x32.png"
     ],
     "publish": {
       "provider": "github",

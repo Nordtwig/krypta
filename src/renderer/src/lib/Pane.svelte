@@ -4,6 +4,7 @@
   import SmartBar from './SmartBar.svelte'
   import ContextMenu from './ContextMenu.svelte'
   import { buildIndex, query as runQuery, invalidateCache, highlightSegments, isKnownTag, suggestTag } from './search.js'
+  import { sep, baseName, isUnder, relHome, getBreadcrumbs, lastSepIndex, isWindows } from './paths.js'
 
   let {
     currentDir = $bindable(window.krypta.homeDir),
@@ -117,6 +118,9 @@
   let loadError = $state(null)
   let breadcrumbsEl = $state(null)
   let breadcrumbScrollTimer = null
+  let driveMenu = $state(false)
+  let drives = $state([])
+  let driveMenuPos = $state({ x: 0, y: 0 })
   let sizeColWidth = $state(90)
   let dateColBaseWidth = $state(110)
   let dateColWidth = $derived.by(() => {
@@ -177,6 +181,7 @@
   let pendingDrag = null
 
   function handleRowPointerDown(e, entry) {
+    if (isWindows) return  // Windows uses native HTML5 drag (see handleRowDragStart)
     if (e.button !== 0 || e.shiftKey) return
     const names = selectedNames.has(entry.name) ? new Set(selectedNames) : new Set([entry.name])
     pendingDrag = { names, singleIsDir: entry.isDirectory && names.size === 1, startX: e.clientX, startY: e.clientY }
@@ -201,9 +206,111 @@
     pendingDrag = null
   }
 
+  // Drop-target tracking — shared by the pointer-event DnD (Linux/macOS) and the
+  // native HTML5 DnD (Windows). `e` is a PointerEvent or DragEvent; both expose
+  // target + clientY + ctrlKey, which is all these need.
+  function updateDropTarget(e) {
+    if (!pointerDrag) return
+    const row = e.target.closest('[data-entry-name]')
+    if (row) {
+      const name = row.dataset.entryName
+      const isDir = row.dataset.entryIsDir === 'true'
+      if (isDir) {
+        if (dropTargetFolder !== name) {
+          dropTargetFolder = name
+          dropOverList = false
+          dropInsertIndex = null
+          clearTimeout(folderHoverTimer)
+          if (settings?.springLoad !== false) {
+            const navTo = window.krypta.joinPath(currentDir, name)
+            folderHoverTimer = setTimeout(() => { currentDir = navTo; dropTargetFolder = null }, settings?.springLoadDelay ?? 800)
+          }
+        }
+      } else {
+        clearTimeout(folderHoverTimer)
+        dropTargetFolder = null
+        const rect = row.getBoundingClientRect()
+        const idx = parseInt(row.dataset.entryIndex ?? '0')
+        dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? idx : idx + 1
+        dropOverList = true
+      }
+    } else {
+      clearTimeout(folderHoverTimer)
+      dropTargetFolder = null
+      dropOverList = true
+      dropInsertIndex = displayFiles.length
+    }
+  }
+
+  function commitDrop(e) {
+    if (!pointerDrag) return
+    if (dropTargetFolder) {
+      const targetDir = window.krypta.joinPath(currentDir, dropTargetFolder)
+      if (targetDir !== pointerDrag.sourceDir) onFileDrop?.(targetDir, e.ctrlKey)
+    } else if (dropOverList && currentDir !== pointerDrag.sourceDir) {
+      onFileDrop?.(currentDir, e.ctrlKey)
+    }
+    clearDropState()
+  }
+
+  function clearDropState() {
+    dropTargetFolder = null
+    dropOverList = false
+    dropInsertIndex = null
+    clearTimeout(folderHoverTimer)
+  }
+
+  // Native HTML5 drag (Windows). Plain HTML5 drag — no startDrag/preventDefault —
+  // so dragover/drop fire normally for internal moves. Sets the shared pointerDrag
+  // state so the drop pipeline + ghost work unchanged. A transparent drag image
+  // hides the browser's default snapshot; the custom ghost is shown instead.
+  const dragImg = typeof Image !== 'undefined'
+    ? Object.assign(new Image(), { src: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' })
+    : null
+  function handleRowDragStart(e, entry) {
+    if (e.shiftKey) { e.preventDefault(); return }
+    const names = selectedNames.has(entry.name) ? new Set(selectedNames) : new Set([entry.name])
+    if (e.altKey) {
+      // Alt+drag = external drag-out to other apps (OS-level file drag). Can't
+      // coexist with the HTML5 internal drag in one gesture, so it's modifier-gated.
+      e.preventDefault()
+      window.krypta.startDrag([...names].map(n => window.krypta.joinPath(currentDir, n)))
+      return
+    }
+    const singleIsDir = entry.isDirectory && names.size === 1
+    e.dataTransfer.effectAllowed = 'copyMove'
+    e.dataTransfer.setData('application/x-krypta-files', '1')
+    if (dragImg) e.dataTransfer.setDragImage(dragImg, 0, 0)
+    onFileDragStart?.(currentDir, names, singleIsDir, e.clientX, e.clientY)
+  }
+
+  // Breadcrumb drop targets (drop a file onto an ancestor crumb to move it there) —
+  // shared by pointer (Linux/macOS) and native (Windows) DnD.
+  function crumbDragOver(crumbPath) {
+    if (!pointerDrag || dropCrumb === crumbPath) return
+    dropCrumb = crumbPath
+    clearTimeout(crumbHoverTimer)
+    if (settings?.springLoad !== false) {
+      crumbHoverTimer = setTimeout(() => { currentDir = crumbPath; dropCrumb = null }, settings?.springLoadDelay ?? 800)
+    }
+  }
+
+  function crumbDragLeave() {
+    if (!pointerDrag) return
+    dropCrumb = null
+    clearTimeout(crumbHoverTimer)
+  }
+
+  function crumbDrop(e, crumbPath) {
+    if (!pointerDrag) return
+    clearTimeout(crumbHoverTimer)
+    dropCrumb = null
+    if (pointerDrag.sourceDir !== crumbPath) onFileDrop?.(crumbPath, e.ctrlKey)
+  }
+
   let smartBarFilter = $derived(() => {
     if (!showSmartBar) return ''
-    const i = smartBarQuery.lastIndexOf('/')
+    const i = lastSepIndex(smartBarQuery)
     return i >= 0 ? smartBarQuery.slice(i + 1) : smartBarQuery
   })
 
@@ -249,7 +356,7 @@
       return (cairns ?? [])
         .filter(p => !filter || p.toLowerCase().includes(filter))
         .map(p => ({
-          name: p.split('/').filter(Boolean).at(-1) ?? p,
+          name: baseName(p),
           isDirectory: true,
           _cairnPath: p,
           size: null,
@@ -309,9 +416,7 @@
         return suggestion ? suggestion.slice(tagMatch[1].length) : ''
       }
       if (smartBarQuery !== '?') return ''
-      const home = window.krypta.homeDir
-      if (currentDir === home) return '~'
-      return currentDir.startsWith(home + '/') ? '~' + currentDir.slice(home.length) : currentDir
+      return relHome(currentDir)
     }
     if (smartBarCairnsMode) {
       const filter = smartBarQuery.slice(1).toLowerCase()
@@ -323,9 +428,9 @@
     const filter = smartBarFilter()
     const selected = displayFiles[selectedIndex]
     if (!selected?.isDirectory) return ''
-    if (!filter) return selected.name + '/'
+    if (!filter) return selected.name + sep
     if (!selected.name.toLowerCase().startsWith(filter.toLowerCase())) return ''
-    return selected.name.slice(filter.length) + '/'
+    return selected.name.slice(filter.length) + sep
   })
 
   $effect(() => {
@@ -366,17 +471,6 @@
     currentDir
     if (breadcrumbsEl) breadcrumbsEl.scrollLeft = breadcrumbsEl.scrollWidth
   })
-
-  function getBreadcrumbs(dir) {
-    const parts = dir.split('/').filter(Boolean)
-    return [
-      { name: '/', path: '/' },
-      ...parts.map((part, i) => ({
-        name: part,
-        path: '/' + parts.slice(0, i + 1).join('/')
-      }))
-    ]
-  }
 
   $effect(() => {
     refreshKey
@@ -494,10 +588,22 @@
 
   function navigateUp() {
     if (!window.krypta.isRoot(currentDir)) {
-      const parts = currentDir.split('/').filter(Boolean)
-      pendingSelectName = parts[parts.length - 1] ?? null
+      pendingSelectName = baseName(currentDir)
       currentDir = window.krypta.parentDir(currentDir)
     }
+  }
+
+  async function toggleDriveMenu(e) {
+    if (driveMenu) { driveMenu = false; return }
+    const r = e.currentTarget.getBoundingClientRect()
+    driveMenuPos = { x: r.left, y: r.bottom + 4 }
+    driveMenu = true
+    try { drives = (await window.krypta.listDrives?.()) ?? [] } catch { drives = [] }
+  }
+
+  function selectDrive(d) {
+    driveMenu = false
+    if (d !== currentDir) currentDir = d
   }
 
   $effect(() => {
@@ -766,7 +872,7 @@
 
   function openSmartBar() {
     smartBarOriginalDir = currentDir
-    smartBarQuery = currentDir.endsWith('/') ? currentDir : currentDir + '/'
+    smartBarQuery = (currentDir.endsWith('/') || currentDir.endsWith('\\')) ? currentDir : currentDir + sep
     selectedIndex = Math.max(0, selectedIndex)
     showSmartBar = true
   }
@@ -795,11 +901,8 @@
   function searchResultParent(entry) {
     if (!entry._searchPath) return ''
     const parent = window.krypta.parentDir(entry._searchPath)
-    const home = window.krypta.homeDir
     if (parent === currentDir) return '—'
-    if (parent === home) return '~'
-    if (parent.startsWith(home + '/')) return '~' + parent.slice(home.length)
-    return parent
+    return relHome(parent)
   }
 
   function closeSmartBar() {
@@ -825,19 +928,20 @@
     if (query.includes('@')) { smartBarQuery = '@'; return }
     if (query.startsWith('?')) return
     if (query.includes('?')) { smartBarQuery = '?'; return }
-    const lastSlash = query.lastIndexOf('/')
-    const dirPart = query.slice(0, lastSlash + 1)
+    const lastSlash = lastSepIndex(query)
+    if (lastSlash < 0) return
+    const dirPart = query.slice(0, lastSlash + 1)  // includes trailing separator
 
-    if (dirPart) {
-      const normalizedDir = dirPart === '/' ? '/' : dirPart.replace(/\/$/, '')
-      if (normalizedDir !== currentDir) {
-        try {
-          const loaded = await window.krypta.readDir(dirPart)
-          files = loaded
-          currentDir = normalizedDir
-          selectedIndex = 0
-        } catch {}
-      }
+    let normalizedDir = dirPart.replace(/[/\\]+$/, '')
+    if (normalizedDir === '') normalizedDir = '/'                    // POSIX root
+    else if (/^[A-Za-z]:$/.test(normalizedDir)) normalizedDir += sep // Windows drive root (C:\)
+    if (normalizedDir !== currentDir) {
+      try {
+        const loaded = await window.krypta.readDir(dirPart)
+        files = loaded
+        currentDir = normalizedDir
+        selectedIndex = 0
+      } catch {}
     }
   }
 
@@ -870,11 +974,11 @@
       return
     }
     const filter = smartBarFilter()
-    const lastSlash = smartBarQuery.lastIndexOf('/')
+    const lastSlash = lastSepIndex(smartBarQuery)
     if (!filter) {
       const selected = displayFiles[selectedIndex]
       if (selected?.isDirectory) {
-        smartBarQuery = smartBarQuery.slice(0, lastSlash + 1) + selected.name + '/'
+        smartBarQuery = smartBarQuery.slice(0, lastSlash + 1) + selected.name + sep
         handleSmartBarInput(smartBarQuery)
       }
       return
@@ -887,7 +991,7 @@
     if (prefixMatches.length === 1) {
       // Only one candidate left → enter it directly
       const m = prefixMatches[0]
-      smartBarQuery = dirPart + m.name + (m.isDirectory ? '/' : '')
+      smartBarQuery = dirPart + m.name + (m.isDirectory ? sep : '')
       handleSmartBarInput(smartBarQuery)
       return
     }
@@ -898,13 +1002,13 @@
     if (selectedMatches) {
       if (selected.name.toLowerCase() === filter.toLowerCase()) {
         // Filter exactly equals selected item's full name → enter it
-        smartBarQuery = dirPart + selected.name + (selected.isDirectory ? '/' : '')
+        smartBarQuery = dirPart + selected.name + (selected.isDirectory ? sep : '')
       } else {
         // Fill to selected item's full name; also enter if it's now the only prefix match
         const uniqueAfterFill = files.filter(f =>
           f.name.toLowerCase().startsWith(selected.name.toLowerCase())
         ).length === 1
-        smartBarQuery = dirPart + selected.name + (uniqueAfterFill && selected.isDirectory ? '/' : '')
+        smartBarQuery = dirPart + selected.name + (uniqueAfterFill && selected.isDirectory ? sep : '')
       }
       handleSmartBarInput(smartBarQuery)
       return
@@ -1411,43 +1515,37 @@
       >
         {#each breadcrumbs as crumb, i}
           {#if i > 0}<span class="sep">›</span>{/if}
-          {#if i < breadcrumbs.length - 1}
+          {#if isWindows && i === 0}
+            <button
+              class="crumb drive-switch"
+              class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)}
+              title="Switch drive"
+              onclick={(e) => { e.stopPropagation(); toggleDriveMenu(e) }}
+            >{crumb.name}</button>
+          {:else if i < breadcrumbs.length - 1}
             <button
               class="crumb"
-              class:git-dir={gitInfo && (crumb.path === gitInfo.root || crumb.path.startsWith(gitInfo.root + '/'))}
+              class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)}
               class:drop-target={dropCrumb === crumb.path}
               onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { currentDir = crumb.path } }}
               oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}
-              onpointerenter={() => {
-                if (!pointerDrag) return
-                if (dropCrumb !== crumb.path) {
-                  dropCrumb = crumb.path
-                  clearTimeout(crumbHoverTimer)
-                  if (settings?.springLoad !== false) {
-                    crumbHoverTimer = setTimeout(() => { currentDir = crumb.path; dropCrumb = null }, settings?.springLoadDelay ?? 800)
-                  }
-                }
-              }}
-              onpointerleave={() => {
-                if (!pointerDrag) return
-                dropCrumb = null
-                clearTimeout(crumbHoverTimer)
-              }}
-              onpointerup={(e) => {
-                if (!pointerDrag) return
-                clearTimeout(crumbHoverTimer)
-                dropCrumb = null
-                if (pointerDrag.sourceDir !== crumb.path) onFileDrop?.(crumb.path, e.ctrlKey)
-              }}
+              onpointerenter={() => crumbDragOver(crumb.path)}
+              onpointerleave={crumbDragLeave}
+              onpointerup={(e) => crumbDrop(e, crumb.path)}
+              ondragenter={(e) => { if (pointerDrag) e.preventDefault() }}
+              ondragover={(e) => { if (!pointerDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; crumbDragOver(crumb.path) }}
+              ondragleave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) crumbDragLeave() }}
+              ondrop={(e) => { if (!pointerDrag) return; e.preventDefault(); crumbDrop(e, crumb.path) }}
             >{crumb.name}</button>
           {:else}
-            <button class="crumb" class:git-dir={gitInfo && (crumb.path === gitInfo.root || crumb.path.startsWith(gitInfo.root + '/'))} onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
+            <button class="crumb" class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)} onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
           {/if}
         {/each}
       </div>
       {#if gitInfo}
         <span class="git-badge" title="Git repo: {gitInfo.root}">⎇ {gitInfo.branch}</span>
       {/if}
+      <button class="pathbar-spacer" aria-label="Edit path" title="Edit path" onclick={openSmartBar}></button>
       <div class="pane-actions">
         <button class="pane-action-btn" onclick={onAddPane} title="New pane">+</button>
         <span class="pane-actions-sep"></span>
@@ -1493,58 +1591,13 @@
         selectedNames = new Set()
       }
     }}
-    onpointermove={(e) => {
-      if (!pointerDrag) return
-      const row = e.target.closest('[data-entry-name]')
-      if (row) {
-        const name = row.dataset.entryName
-        const isDir = row.dataset.entryIsDir === 'true'
-        if (isDir) {
-          if (dropTargetFolder !== name) {
-            dropTargetFolder = name
-            dropOverList = false
-            dropInsertIndex = null
-            clearTimeout(folderHoverTimer)
-            if (settings?.springLoad !== false) {
-              const navTo = window.krypta.joinPath(currentDir, name)
-              folderHoverTimer = setTimeout(() => { currentDir = navTo; dropTargetFolder = null }, settings?.springLoadDelay ?? 800)
-            }
-          }
-        } else {
-          clearTimeout(folderHoverTimer)
-          dropTargetFolder = null
-          const rect = row.getBoundingClientRect()
-          const idx = parseInt(row.dataset.entryIndex ?? '0')
-          dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? idx : idx + 1
-          dropOverList = true
-        }
-      } else {
-        clearTimeout(folderHoverTimer)
-        dropTargetFolder = null
-        dropOverList = true
-        dropInsertIndex = displayFiles.length
-      }
-    }}
-    onpointerup={(e) => {
-      if (!pointerDrag) return
-      if (dropTargetFolder) {
-        const targetDir = window.krypta.joinPath(currentDir, dropTargetFolder)
-        if (targetDir !== pointerDrag.sourceDir) onFileDrop?.(targetDir, e.ctrlKey)
-      } else if (dropOverList && currentDir !== pointerDrag.sourceDir) {
-        onFileDrop?.(currentDir, e.ctrlKey)
-      }
-      dropTargetFolder = null
-      dropOverList = false
-      dropInsertIndex = null
-      clearTimeout(folderHoverTimer)
-    }}
-    onpointerleave={() => {
-      if (!pointerDrag) return
-      dropOverList = false
-      dropTargetFolder = null
-      dropInsertIndex = null
-      clearTimeout(folderHoverTimer)
-    }}
+    onpointermove={updateDropTarget}
+    onpointerup={commitDrop}
+    onpointerleave={() => { if (pointerDrag) clearDropState() }}
+    ondragenter={(e) => { if (pointerDrag) e.preventDefault() }}
+    ondragover={(e) => { if (!pointerDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; updateDropTarget(e) }}
+    ondrop={(e) => { if (!pointerDrag) return; e.preventDefault(); commitDrop(e) }}
+    ondragleave={(e) => { if (pointerDrag && !e.currentTarget.contains(e.relatedTarget)) clearDropState() }}
   >
     {#if loadError}
       <div class="list-notice error">{loadError}</div>
@@ -1598,6 +1651,9 @@
         data-entry-name={entry.name}
         data-entry-is-dir={entry.isDirectory}
         data-entry-index={i}
+        draggable={isWindows}
+        ondragstart={(e) => handleRowDragStart(e, entry)}
+        ondragend={() => onFileDragEnd?.()}
         onpointerdown={(e) => handleRowPointerDown(e, entry)}
         oncontextmenu={(e) => openContextMenu(e, entry)}
         onclick={(e) => {
@@ -1766,6 +1822,16 @@
     />
   {/if}
 
+  {#if driveMenu}
+    <button class="drive-backdrop" aria-label="Close drive menu" onclick={() => driveMenu = false}></button>
+    <div class="drive-menu" style="left: {driveMenuPos.x}px; top: {driveMenuPos.y}px;">
+      {#each drives as d}
+        <button class="drive-item" class:active={isUnder(currentDir, d)} onclick={() => selectDrive(d)}>{d}</button>
+      {/each}
+      {#if drives.length === 0}<div class="drive-empty">No drives found</div>{/if}
+    </div>
+  {/if}
+
   <div class="pane-footer">
     <div
       class="pane-handle"
@@ -1866,6 +1932,47 @@
     font-size: 10px;
     opacity: 0.25;
     padding: 0 1px;
+  }
+
+  .drive-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: none;
+    border: none;
+    cursor: default;
+  }
+  .drive-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 80px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .drive-item {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .drive-item:hover { background: var(--bg-hover); color: var(--pink); }
+  .drive-item.active { color: var(--emerald); }
+  .drive-empty {
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 4px 8px;
+    opacity: 0.6;
   }
 
   .file-header {
@@ -2107,8 +2214,17 @@
     pointer-events: none;
   }
 
+  .pathbar-spacer {
+    flex: 1 1 0;
+    align-self: stretch;
+    min-width: 8px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
   .pane-actions {
-    margin-left: auto;
     flex-shrink: 0;
     display: flex;
     align-items: center;

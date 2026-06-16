@@ -8,6 +8,7 @@
   import SearchPane from './lib/SearchPane.svelte'
   import KryptaLogo from './lib/KryptaLogo.svelte'
   import { getFileIcon } from './lib/fileIcons.js'
+  import { isUnder, isWindows } from './lib/paths.js'
 
   const COMFORTABLE = 300
   const DEFAULT_WIDTH = 450
@@ -503,7 +504,9 @@
         pushHistory({ type: 'move', srcDir: sourceDir, destDir: targetDir, names: nameArr })
         handleMoved(sourceDir, targetDir, nameArr)
       }
-    } catch {}
+    } catch (e) {
+      showToast(`Couldn't ${isCopy ? 'copy' : 'move'} ${nameArr.length === 1 ? `"${nameArr[0]}"` : `${nameArr.length} items`} — ${e?.message ?? e}`)
+    }
   }
 
   function handlePaneDrop(fromIndex, toIndex) {
@@ -565,7 +568,7 @@
       if (panes[i].type) return
       for (const name of names) {
         const oldBase = window.krypta.joinPath(srcDir, name)
-        if (panes[i].dir === oldBase || panes[i].dir.startsWith(oldBase + '/')) {
+        if (isUnder(panes[i].dir, oldBase)) {
           const newBase = window.krypta.joinPath(destDir, name)
           panes[i].dir = newBase + panes[i].dir.slice(oldBase.length)
           panes[i].refreshKey++
@@ -714,6 +717,17 @@
     if (!pointerDrag) return
     function onMove(e) { if (pointerDrag) { pointerDrag.x = e.clientX; pointerDrag.y = e.clientY } }
     function onUp() { handleFileDragEnd() }
+    if (isWindows) {
+      // Native HTML5 drag (Windows) suppresses pointer events — follow the ghost
+      // via `dragover` and clear on `dragend` (internal drops also self-clear via
+      // handleFileDrop).
+      document.addEventListener('dragover', onMove)
+      document.addEventListener('dragend', onUp)
+      return () => {
+        document.removeEventListener('dragover', onMove)
+        document.removeEventListener('dragend', onUp)
+      }
+    }
     document.addEventListener('pointermove', onMove)
     document.addEventListener('pointerup', onUp)
     return () => {
