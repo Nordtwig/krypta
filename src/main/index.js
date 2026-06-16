@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, screen, nativeImage } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readdir, rm, mkdir, stat } from 'fs/promises'
@@ -137,3 +137,24 @@ ipcMain.handle('set-window-bounds', (_, { x, y, width, height }) => {
 
 ipcMain.handle('search-files', (_, rootDir, opts) => walkDir(rootDir, opts))
 ipcMain.handle('flush-krypta-trash', () => flushKryptaTrash())
+
+// Native OS drag-out: hands real files to other apps. startDrag requires a
+// NON-EMPTY icon (an empty one silently no-ops on Windows), so load a real PNG.
+let dragIcon = null
+function getDragIcon() {
+  if (dragIcon && !dragIcon.isEmpty()) return dragIcon
+  const img = nativeImage.createFromPath(join(app.getAppPath(), 'resources', 'icons', '32x32.png'))
+  dragIcon = img.isEmpty() ? nativeImage.createEmpty() : img
+  return dragIcon
+}
+ipcMain.on('start-drag', (e, files) => {
+  if (!Array.isArray(files) || files.length === 0) return
+  // Works into applications (editors, browsers, upload fields). Native Windows
+  // Shell targets (Explorer, desktop) reject it — an Electron startDrag limitation
+  // that needs a native IDataObject to fix.
+  try {
+    e.sender.startDrag(files.length === 1 ? { file: files[0], icon: getDragIcon() } : { files, icon: getDragIcon() })
+  } catch (err) {
+    console.error('[start-drag] startDrag threw:', err)
+  }
+})

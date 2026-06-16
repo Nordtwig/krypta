@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld('krypta', {
 
   searchFiles: (rootDir, opts = {}) => ipcRenderer.invoke('search-files', rootDir, opts),
 
+  // Native OS drag-out (Windows/macOS/X11): start an OS-level drag of real files
+  startDrag: (files) => ipcRenderer.send('start-drag', files),
+
   getRecursiveSize: async (dirPath) => {
     async function walk(p) {
       let total = 0
@@ -108,7 +111,18 @@ contextBridge.exposeInMainWorld('krypta', {
   parentDir: (dirPath) => dirname(dirPath),
   joinPath: (...parts) => join(...parts),
 
-  move: (src, dest) => rename(src, dest),
+  move: async (src, dest) => {
+    try {
+      await rename(src, dest)
+    } catch (e) {
+      if (e.code === 'EXDEV') {  // cross-device (e.g. C: → D:) — rename can't; copy then delete
+        await cp(src, dest, { recursive: true })
+        await rm(src, { recursive: true })
+      } else {
+        throw e
+      }
+    }
+  },
   copy: (src, dest) => cp(src, dest, { recursive: true }),
   createFile: (filePath) => writeFile(filePath, ''),
   createDir: (dirPath) => mkdir(dirPath),

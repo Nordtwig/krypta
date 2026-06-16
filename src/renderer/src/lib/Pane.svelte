@@ -181,6 +181,7 @@
   let pendingDrag = null
 
   function handleRowPointerDown(e, entry) {
+    if (isWindows) return  // Windows uses native HTML5 drag (see handleRowDragStart)
     if (e.button !== 0 || e.shiftKey) return
     const names = selectedNames.has(entry.name) ? new Set(selectedNames) : new Set([entry.name])
     pendingDrag = { names, singleIsDir: entry.isDirectory && names.size === 1, startX: e.clientX, startY: e.clientY }
@@ -203,6 +204,108 @@
   function cancelPendingDrag() {
     document.removeEventListener('pointermove', handlePendingMove)
     pendingDrag = null
+  }
+
+  // Drop-target tracking — shared by the pointer-event DnD (Linux/macOS) and the
+  // native HTML5 DnD (Windows). `e` is a PointerEvent or DragEvent; both expose
+  // target + clientY + ctrlKey, which is all these need.
+  function updateDropTarget(e) {
+    if (!pointerDrag) return
+    const row = e.target.closest('[data-entry-name]')
+    if (row) {
+      const name = row.dataset.entryName
+      const isDir = row.dataset.entryIsDir === 'true'
+      if (isDir) {
+        if (dropTargetFolder !== name) {
+          dropTargetFolder = name
+          dropOverList = false
+          dropInsertIndex = null
+          clearTimeout(folderHoverTimer)
+          if (settings?.springLoad !== false) {
+            const navTo = window.krypta.joinPath(currentDir, name)
+            folderHoverTimer = setTimeout(() => { currentDir = navTo; dropTargetFolder = null }, settings?.springLoadDelay ?? 800)
+          }
+        }
+      } else {
+        clearTimeout(folderHoverTimer)
+        dropTargetFolder = null
+        const rect = row.getBoundingClientRect()
+        const idx = parseInt(row.dataset.entryIndex ?? '0')
+        dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? idx : idx + 1
+        dropOverList = true
+      }
+    } else {
+      clearTimeout(folderHoverTimer)
+      dropTargetFolder = null
+      dropOverList = true
+      dropInsertIndex = displayFiles.length
+    }
+  }
+
+  function commitDrop(e) {
+    if (!pointerDrag) return
+    if (dropTargetFolder) {
+      const targetDir = window.krypta.joinPath(currentDir, dropTargetFolder)
+      if (targetDir !== pointerDrag.sourceDir) onFileDrop?.(targetDir, e.ctrlKey)
+    } else if (dropOverList && currentDir !== pointerDrag.sourceDir) {
+      onFileDrop?.(currentDir, e.ctrlKey)
+    }
+    clearDropState()
+  }
+
+  function clearDropState() {
+    dropTargetFolder = null
+    dropOverList = false
+    dropInsertIndex = null
+    clearTimeout(folderHoverTimer)
+  }
+
+  // Native HTML5 drag (Windows). Plain HTML5 drag — no startDrag/preventDefault —
+  // so dragover/drop fire normally for internal moves. Sets the shared pointerDrag
+  // state so the drop pipeline + ghost work unchanged. A transparent drag image
+  // hides the browser's default snapshot; the custom ghost is shown instead.
+  const dragImg = typeof Image !== 'undefined'
+    ? Object.assign(new Image(), { src: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' })
+    : null
+  function handleRowDragStart(e, entry) {
+    if (e.shiftKey) { e.preventDefault(); return }
+    const names = selectedNames.has(entry.name) ? new Set(selectedNames) : new Set([entry.name])
+    if (e.altKey) {
+      // Alt+drag = external drag-out to other apps (OS-level file drag). Can't
+      // coexist with the HTML5 internal drag in one gesture, so it's modifier-gated.
+      e.preventDefault()
+      window.krypta.startDrag([...names].map(n => window.krypta.joinPath(currentDir, n)))
+      return
+    }
+    const singleIsDir = entry.isDirectory && names.size === 1
+    e.dataTransfer.effectAllowed = 'copyMove'
+    e.dataTransfer.setData('application/x-krypta-files', '1')
+    if (dragImg) e.dataTransfer.setDragImage(dragImg, 0, 0)
+    onFileDragStart?.(currentDir, names, singleIsDir, e.clientX, e.clientY)
+  }
+
+  // Breadcrumb drop targets (drop a file onto an ancestor crumb to move it there) —
+  // shared by pointer (Linux/macOS) and native (Windows) DnD.
+  function crumbDragOver(crumbPath) {
+    if (!pointerDrag || dropCrumb === crumbPath) return
+    dropCrumb = crumbPath
+    clearTimeout(crumbHoverTimer)
+    if (settings?.springLoad !== false) {
+      crumbHoverTimer = setTimeout(() => { currentDir = crumbPath; dropCrumb = null }, settings?.springLoadDelay ?? 800)
+    }
+  }
+
+  function crumbDragLeave() {
+    if (!pointerDrag) return
+    dropCrumb = null
+    clearTimeout(crumbHoverTimer)
+  }
+
+  function crumbDrop(e, crumbPath) {
+    if (!pointerDrag) return
+    clearTimeout(crumbHoverTimer)
+    dropCrumb = null
+    if (pointerDrag.sourceDir !== crumbPath) onFileDrop?.(crumbPath, e.ctrlKey)
   }
 
   let smartBarFilter = $derived(() => {
@@ -1426,27 +1529,13 @@
               class:drop-target={dropCrumb === crumb.path}
               onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { currentDir = crumb.path } }}
               oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}
-              onpointerenter={() => {
-                if (!pointerDrag) return
-                if (dropCrumb !== crumb.path) {
-                  dropCrumb = crumb.path
-                  clearTimeout(crumbHoverTimer)
-                  if (settings?.springLoad !== false) {
-                    crumbHoverTimer = setTimeout(() => { currentDir = crumb.path; dropCrumb = null }, settings?.springLoadDelay ?? 800)
-                  }
-                }
-              }}
-              onpointerleave={() => {
-                if (!pointerDrag) return
-                dropCrumb = null
-                clearTimeout(crumbHoverTimer)
-              }}
-              onpointerup={(e) => {
-                if (!pointerDrag) return
-                clearTimeout(crumbHoverTimer)
-                dropCrumb = null
-                if (pointerDrag.sourceDir !== crumb.path) onFileDrop?.(crumb.path, e.ctrlKey)
-              }}
+              onpointerenter={() => crumbDragOver(crumb.path)}
+              onpointerleave={crumbDragLeave}
+              onpointerup={(e) => crumbDrop(e, crumb.path)}
+              ondragenter={(e) => { if (pointerDrag) e.preventDefault() }}
+              ondragover={(e) => { if (!pointerDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; crumbDragOver(crumb.path) }}
+              ondragleave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) crumbDragLeave() }}
+              ondrop={(e) => { if (!pointerDrag) return; e.preventDefault(); crumbDrop(e, crumb.path) }}
             >{crumb.name}</button>
           {:else}
             <button class="crumb" class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)} onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
@@ -1502,58 +1591,13 @@
         selectedNames = new Set()
       }
     }}
-    onpointermove={(e) => {
-      if (!pointerDrag) return
-      const row = e.target.closest('[data-entry-name]')
-      if (row) {
-        const name = row.dataset.entryName
-        const isDir = row.dataset.entryIsDir === 'true'
-        if (isDir) {
-          if (dropTargetFolder !== name) {
-            dropTargetFolder = name
-            dropOverList = false
-            dropInsertIndex = null
-            clearTimeout(folderHoverTimer)
-            if (settings?.springLoad !== false) {
-              const navTo = window.krypta.joinPath(currentDir, name)
-              folderHoverTimer = setTimeout(() => { currentDir = navTo; dropTargetFolder = null }, settings?.springLoadDelay ?? 800)
-            }
-          }
-        } else {
-          clearTimeout(folderHoverTimer)
-          dropTargetFolder = null
-          const rect = row.getBoundingClientRect()
-          const idx = parseInt(row.dataset.entryIndex ?? '0')
-          dropInsertIndex = e.clientY < rect.top + rect.height / 2 ? idx : idx + 1
-          dropOverList = true
-        }
-      } else {
-        clearTimeout(folderHoverTimer)
-        dropTargetFolder = null
-        dropOverList = true
-        dropInsertIndex = displayFiles.length
-      }
-    }}
-    onpointerup={(e) => {
-      if (!pointerDrag) return
-      if (dropTargetFolder) {
-        const targetDir = window.krypta.joinPath(currentDir, dropTargetFolder)
-        if (targetDir !== pointerDrag.sourceDir) onFileDrop?.(targetDir, e.ctrlKey)
-      } else if (dropOverList && currentDir !== pointerDrag.sourceDir) {
-        onFileDrop?.(currentDir, e.ctrlKey)
-      }
-      dropTargetFolder = null
-      dropOverList = false
-      dropInsertIndex = null
-      clearTimeout(folderHoverTimer)
-    }}
-    onpointerleave={() => {
-      if (!pointerDrag) return
-      dropOverList = false
-      dropTargetFolder = null
-      dropInsertIndex = null
-      clearTimeout(folderHoverTimer)
-    }}
+    onpointermove={updateDropTarget}
+    onpointerup={commitDrop}
+    onpointerleave={() => { if (pointerDrag) clearDropState() }}
+    ondragenter={(e) => { if (pointerDrag) e.preventDefault() }}
+    ondragover={(e) => { if (!pointerDrag) return; e.preventDefault(); e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move'; updateDropTarget(e) }}
+    ondrop={(e) => { if (!pointerDrag) return; e.preventDefault(); commitDrop(e) }}
+    ondragleave={(e) => { if (pointerDrag && !e.currentTarget.contains(e.relatedTarget)) clearDropState() }}
   >
     {#if loadError}
       <div class="list-notice error">{loadError}</div>
@@ -1607,6 +1651,9 @@
         data-entry-name={entry.name}
         data-entry-is-dir={entry.isDirectory}
         data-entry-index={i}
+        draggable={isWindows}
+        ondragstart={(e) => handleRowDragStart(e, entry)}
+        ondragend={() => onFileDragEnd?.()}
         onpointerdown={(e) => handleRowPointerDown(e, entry)}
         oncontextmenu={(e) => openContextMenu(e, entry)}
         onclick={(e) => {
