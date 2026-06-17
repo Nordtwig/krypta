@@ -1674,7 +1674,6 @@
     class:drop-over={dropOverList && !dropTargetFolder}
     bind:this={fileListEl}
     onscroll={(e) => { fileListScrollTop = e.currentTarget.scrollTop }}
-    style="padding-top: {virtualSlice.paddingTop}px; padding-bottom: {virtualSlice.paddingBottom}px"
     onmousemove={() => { if (keyboardActive) keyboardActive = false }}
     onmouseleave={() => { hoveredIndex = -1 }}
     oncontextmenu={(e) => openContextMenu(e, null)}
@@ -1723,6 +1722,12 @@
         {#if showSizeCol}<span class="col-size"></span>{/if}
         {#if showDateCol}<span class="col-date"></span>{/if}
       </div>
+    {/if}
+    <!-- Virtual-scroll top spacer (explicit-height element; container padding is not
+         reliably counted in scrollHeight). Rendered only when scrolled so the at-top
+         DOM matches what the DnD children[idx+offset] lookups expect. -->
+    {#if virtualSlice.paddingTop > 0}
+      <div class="vscroll-spacer" style="height: {virtualSlice.paddingTop}px" aria-hidden="true"></div>
     {/if}
     {#each displayFiles.slice(virtualSlice.start, virtualSlice.end) as entry, vi (entry.name)}
       {@const i = virtualSlice.start + vi}
@@ -1832,6 +1837,9 @@
     {#if dropInsertIndex === displayFiles.length && dropOverList && !dropTargetFolder}
       <div class="drop-line"></div>
     {/if}
+    <!-- Virtual-scroll bottom spacer: an explicit-height element (counted in scrollHeight),
+         since padding-bottom on a scroll container is not reliably included in Chromium. -->
+    <div class="vscroll-spacer" style="height: {virtualSlice.paddingBottom}px" aria-hidden="true"></div>
   </div>
 
   {#if settings?.showCreateBtn !== false}
@@ -2155,6 +2163,11 @@
     flex: 1;
     min-height: 0;  /* let flex child shrink so overflow-y scrolls instead of growing to fit injected virtual-scroll padding */
     overflow-y: auto;
+  }
+
+  .vscroll-spacer {
+    flex-shrink: 0;       /* never collapse — it holds the virtual scroll height */
+    pointer-events: none; /* clicks/drops pass through to .file-list */
   }
 
   .list-notice {
