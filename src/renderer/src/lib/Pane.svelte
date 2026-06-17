@@ -1,3 +1,7 @@
+<script context="module">
+  const appIconCache = new Map()
+</script>
+
 <script>
   import { Folder, File, GripVertical, X, ChevronLeft } from 'lucide-svelte'
   import { getFileIcon } from './fileIcons.js'
@@ -42,6 +46,7 @@
 
   let files = $state([])
   let badges = $state({})
+  let appIcons = $state({})
   let gitInfo = $state(null)
   let selectedIndex = $state(0)
   let keyboardActive = $state(false)
@@ -115,6 +120,8 @@
   let expandedDates = $state(new Set())
   let pendingSelectName = $state(null)
   let fileListEl = $state(null)
+  let fileListScrollTop = $state(0)
+  let fileListClientHeight = $state(0)
   let loadError = $state(null)
   let breadcrumbsEl = $state(null)
   let breadcrumbScrollTimer = null
@@ -350,6 +357,9 @@
     smartBarSearchResults = runQuery(_smartBarSearchIndex, q, currentDir, smartBarChips)
   })
 
+  const ROW_HEIGHT = 28
+  const OVERSCAN = 8
+
   let displayFiles = $derived.by(() => {
     if (smartBarCairnsMode) {
       const filter = smartBarQuery.slice(1).toLowerCase()
@@ -390,11 +400,14 @@
     const base = (showSmartBar && filter)
       ? files.filter(f => f.name.toLowerCase().includes(filter.toLowerCase()))
       : files
+    const nameCmp = base.length > 500
+      ? (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      : (a, b) => a.name.localeCompare(b.name)
     return [...base].sort((a, b) => {
       if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
       let cmp = 0
       if (sortCol === 'name') {
-        cmp = a.name.localeCompare(b.name)
+        cmp = nameCmp(a, b)
       } else if (sortCol === 'size') {
         const sa = a.isDirectory ? (a.itemCount ?? 0) : (a.size ?? 0)
         const sb = b.isDirectory ? (b.itemCount ?? 0) : (b.size ?? 0)
@@ -404,6 +417,20 @@
       }
       return sortDir === 'asc' ? cmp : -cmp
     })
+  })
+
+  let virtualSlice = $derived.by(() => {
+    const total = displayFiles.length
+    if (total === 0) return { start: 0, end: 0, paddingTop: 0, paddingBottom: 0 }
+    // Clamp to window height: the list viewport can never be taller than the window.
+    // Guards against fileListClientHeight being polluted by the injected scroll padding
+    // (clientHeight includes padding, so a transient layout frame can store a huge value).
+    const raw = fileListClientHeight > 0 ? fileListClientHeight : (fileListEl?.clientHeight ?? 400)
+    const height = Math.min(raw, window.innerHeight)
+    const firstVisible = Math.floor(fileListScrollTop / ROW_HEIGHT)
+    const start = Math.max(0, firstVisible - OVERSCAN)
+    const end = Math.min(total, firstVisible + Math.ceil(height / ROW_HEIGHT) + OVERSCAN)
+    return { start, end, paddingTop: start * ROW_HEIGHT, paddingBottom: (total - end) * ROW_HEIGHT }
   })
 
   let ghostSuggestion = $derived.by(() => {
@@ -437,13 +464,6 @@
     if (!showSmartBar) return
     smartBarFilter()
     selectedIndex = 0
-  })
-
-  $effect(() => {
-    if (selectedIndex < 0) return
-    const offset = creatingType !== null ? 1 : 0
-    const row = fileListEl?.children[selectedIndex + offset]
-    if (row) row.scrollIntoView({ block: 'nearest' })
   })
 
   $effect(() => {
@@ -482,19 +502,56 @@
 
   async function refreshFiles() {
     try {
-      const newFiles = await window.krypta.readDir(currentDir, { showHidden: settings?.showHidden === true })
-      const { mtime } = await window.krypta.statPath(currentDir)
+      const dir = currentDir
+      const showHidden = settings?.showHidden === true
+      const newFiles = await window.krypta.readDirFast(dir, { showHidden })
+      const { mtime } = await window.krypta.statPath(dir)
+      if (currentDir !== dir) return
       lastDirMtime = mtime
       const newNames = new Set(newFiles.map(f => f.name))
       const prevName = files[selectedIndex]?.name
-      files = newFiles
+      // merge existing stat data so sizes/dates don't flash away
+      const statCache = new Map(files.map(f => [f.name, f]))
+      files = newFiles.map(f => ({ size: null, mtime: null, itemCount: null, isExecutable: false, ...statCache.get(f.name), ...f }))
       loadError = null
       selectedNames = new Set([...selectedNames].filter(n => newNames.has(n)))
       const idx = prevName ? newFiles.findIndex(f => f.name === prevName) : -1
       if (idx >= 0) selectedIndex = idx
-      scanBadges(currentDir, newFiles)
+      scanBadges(dir, newFiles)
+      scanAppIcons(dir, newFiles)
+      // re-stat only new entries
+      const newEntries = newFiles.filter(f => !statCache.has(f.name))
+      if (newEntries.length) {
+        const stats = await window.krypta.statEntries(dir, newEntries.map(f => f.name), { showHidden })
+        if (currentDir !== dir) return
+        const statMap = new Map(stats.map(s => [s.name, s]))
+        files = files.map(f => statMap.has(f.name) ? { ...f, ...statMap.get(f.name) } : f)
+        scanAppIcons(dir, files)  // newly-statted entries may be executables
+      }
     } catch { /* silent — don't disrupt UI on background refresh */ }
   }
+
+  // track file-list height for virtual scrolling
+  $effect(() => {
+    if (!fileListEl) return
+    fileListClientHeight = fileListEl.clientHeight
+    const ro = new ResizeObserver(() => { fileListClientHeight = fileListEl.clientHeight })
+    ro.observe(fileListEl)
+    return () => ro.disconnect()
+  })
+
+  // scroll selected row into view on keyboard nav
+  $effect(() => {
+    const idx = selectedIndex
+    if (idx < 0 || !fileListEl) return
+    const itemTop = idx * ROW_HEIGHT
+    const itemBottom = itemTop + ROW_HEIGHT
+    if (itemTop < fileListEl.scrollTop) {
+      fileListEl.scrollTop = itemTop
+    } else if (itemBottom > fileListEl.scrollTop + fileListEl.clientHeight) {
+      fileListEl.scrollTop = itemBottom - fileListEl.clientHeight
+    }
+  })
 
   // forced refresh on window focus
   $effect(() => {
@@ -528,9 +585,31 @@
     }).catch(() => {})
   }
 
+  function scanAppIcons(dir, fileList) {
+    appIcons = {}
+    for (const f of fileList) {
+      if (!f.isExecutable) continue
+      const fullPath = window.krypta.joinPath(dir, f.name)
+      const cached = appIconCache.get(fullPath)
+      if (cached) {
+        appIcons = { ...appIcons, [f.name]: cached }
+      } else {
+        window.krypta.getFileIcon(fullPath).then(dataURL => {
+          if (!dataURL || currentDir !== dir) return
+          appIconCache.set(fullPath, dataURL)
+          appIcons = { ...appIcons, [f.name]: dataURL }
+        }).catch(() => {})
+      }
+    }
+  }
+
   async function loadFiles(dir) {
     try {
-      files = await window.krypta.readDir(dir, { showHidden: settings?.showHidden === true })
+      const showHidden = settings?.showHidden === true
+      // Phase 1 — instant: names + isDirectory only, render immediately
+      const rawFiles = await window.krypta.readDirFast(dir, { showHidden })
+      if (currentDir !== dir) return
+      files = rawFiles.map(f => ({ ...f, size: null, mtime: null, itemCount: null, isExecutable: false }))
       window.krypta.statPath(dir).then(({ mtime }) => { lastDirMtime = mtime }).catch(() => {})
       loadError = null
       if (pendingSelectName) {
@@ -544,7 +623,20 @@
       expandedDates = new Set()
       selectedNames = new Set()
       pendingDeleteNames = new Set()
-      scanBadges(dir, files)
+      fileListScrollTop = 0
+      if (fileListEl) fileListEl.scrollTop = 0
+      scanBadges(dir, rawFiles)
+      // Phase 2 — fire-and-forget: stat entries, merge, then scan app icons
+      // (isExecutable comes from the stat pass). Never awaited, so names render
+      // instantly regardless of how long statting a huge dir takes.
+      window.krypta.statEntries(dir, rawFiles.map(f => f.name), { showHidden })
+        .then(stats => {
+          if (currentDir !== dir) return
+          const statMap = new Map(stats.map(s => [s.name, s]))
+          files = files.map(f => ({ ...f, ...statMap.get(f.name) }))
+          scanAppIcons(dir, files)
+        })
+        .catch(() => {})
     } catch (err) {
       files = []
       loadError = errorReason(err)
@@ -937,8 +1029,7 @@
     else if (/^[A-Za-z]:$/.test(normalizedDir)) normalizedDir += sep // Windows drive root (C:\)
     if (normalizedDir !== currentDir) {
       try {
-        const loaded = await window.krypta.readDir(dirPart)
-        files = loaded
+        await window.krypta.readDirFast(dirPart)
         currentDir = normalizedDir
         selectedIndex = 0
       } catch {}
@@ -1582,6 +1673,8 @@
     class="file-list"
     class:drop-over={dropOverList && !dropTargetFolder}
     bind:this={fileListEl}
+    onscroll={(e) => { fileListScrollTop = e.currentTarget.scrollTop }}
+    style="padding-top: {virtualSlice.paddingTop}px; padding-bottom: {virtualSlice.paddingBottom}px"
     onmousemove={() => { if (keyboardActive) keyboardActive = false }}
     onmouseleave={() => { hoveredIndex = -1 }}
     oncontextmenu={(e) => openContextMenu(e, null)}
@@ -1631,7 +1724,8 @@
         {#if showDateCol}<span class="col-date"></span>{/if}
       </div>
     {/if}
-    {#each displayFiles as entry, i}
+    {#each displayFiles.slice(virtualSlice.start, virtualSlice.end) as entry, vi (entry.name)}
+      {@const i = virtualSlice.start + vi}
       {#if dropInsertIndex === i && dropOverList && !dropTargetFolder}
         <div class="drop-line"></div>
       {/if}
@@ -1681,6 +1775,8 @@
           <span class="icon-wrap">
             {#if entry.isDirectory}
               <Folder size={14} color="var(--pink)" strokeWidth={1.5} />
+            {:else if appIcons[entry.name]}
+              <img src={appIcons[entry.name]} class="app-icon" alt="" />
             {:else}
               {@const FileIcon = getFileIcon(entry.name)}
               <FileIcon size={14} color="var(--text-dim)" strokeWidth={1.5} />
@@ -2057,8 +2153,8 @@
 
   .file-list {
     flex: 1;
+    min-height: 0;  /* let flex child shrink so overflow-y scrolls instead of growing to fit injected virtual-scroll padding */
     overflow-y: auto;
-    padding: 0 0 2px;
   }
 
   .list-notice {
@@ -2122,6 +2218,12 @@
     position: relative;
     display: flex;
     align-items: center;
+  }
+
+  .app-icon {
+    width: 14px;
+    height: 14px;
+    object-fit: contain;
   }
 
   .badge {

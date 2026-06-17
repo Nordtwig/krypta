@@ -2,7 +2,65 @@ import { app, BrowserWindow, ipcMain, shell, screen, nativeImage } from 'electro
 import { autoUpdater } from 'electron-updater'
 import { join } from 'path'
 import { readdir, rm, mkdir, stat } from 'fs/promises'
-import { homedir } from 'os'
+import { homedir, platform } from 'os'
+import { spawn } from 'child_process'
+
+const IS_WIN = platform() === 'win32'
+
+function getHiddenNames(dirPath) {
+  return new Promise((resolve) => {
+    if (!IS_WIN) return resolve(new Set())
+    const child = spawn(`dir /a:h /b "${dirPath}"`, { shell: true, windowsHide: true })
+    let out = ''
+    child.stdout?.on('data', d => { out += d })
+    child.on('error', () => resolve(new Set()))
+    child.on('close', () => {
+      resolve(new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)))
+    })
+  })
+}
+
+async function readDirFast(dirPath, { showHidden = false } = {}) {
+  const entries = await readdir(dirPath, { withFileTypes: true })
+  const hidden = showHidden ? null : await getHiddenNames(dirPath)
+  return entries
+    .filter(e => showHidden || (!e.name.startsWith('.') && !hidden.has(e.name)))
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+      return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+    })
+    .map(e => ({ name: e.name, isDirectory: e.isDirectory() }))
+}
+
+async function statEntries(dirPath, names, { showHidden = false } = {}) {
+  const CONCURRENCY = 50
+  let i = 0
+  const results = new Array(names.length)
+  async function worker() {
+    while (i < names.length) {
+      const idx = i++
+      const name = names[idx]
+      let size = null, mtime = null, isExecutable = false, itemCount = null
+      try {
+        const s = await stat(join(dirPath, name))
+        size = s.size
+        mtime = s.mtime.getTime()
+        if (s.isDirectory()) {
+          try {
+            const children = await readdir(join(dirPath, name))
+            itemCount = children.filter(n => showHidden || !n.startsWith('.')).length
+          } catch {}
+        } else {
+          const ext = name.toLowerCase().includes('.') ? name.toLowerCase().split('.').pop() : ''
+          isExecutable = IS_WIN ? ['exe', 'msi'].includes(ext) : ext === 'appimage'
+        }
+      } catch {}
+      results[idx] = { name, size, mtime, itemCount, isExecutable }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, names.length) }, worker))
+  return results
+}
 
 const SEARCH_SKIP_DIRS = new Set([
   'node_modules', 'dist', 'build', 'out', 'target', '.cache',
@@ -135,8 +193,16 @@ ipcMain.handle('set-window-bounds', (_, { x, y, width, height }) => {
   win?.setBounds({ x, y, width, height })
 })
 
+ipcMain.handle('read-dir-fast', (_, dirPath, opts) => readDirFast(dirPath, opts))
+ipcMain.handle('stat-entries', (_, dirPath, names, opts) => statEntries(dirPath, names, opts))
 ipcMain.handle('search-files', (_, rootDir, opts) => walkDir(rootDir, opts))
 ipcMain.handle('flush-krypta-trash', () => flushKryptaTrash())
+ipcMain.handle('get-file-icon', async (_, filePath) => {
+  try {
+    const img = await app.getFileIcon(filePath, { size: 32 })
+    return img.isEmpty() ? null : img.toDataURL()
+  } catch { return null }
+})
 
 // Native OS drag-out: hands real files to other apps. startDrag requires a
 // NON-EMPTY icon (an empty one silently no-ops on Windows), so load a real PNG.

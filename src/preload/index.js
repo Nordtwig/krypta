@@ -6,6 +6,8 @@ import { homedir, platform } from 'os'
 import { shell } from 'electron'
 import { spawn } from 'child_process'
 
+const IS_WIN = platform() === 'win32'
+
 const TRASH_DIR = join(homedir(), '.krypta-trash')
 const TRASH_FILES = join(TRASH_DIR, 'files')
 const TRASH_INFO  = join(TRASH_DIR, 'info')
@@ -20,53 +22,15 @@ async function ensureTrashDirs() {
   await mkdir(TRASH_INFO,  { recursive: true })
 }
 
-// Windows hides files via the Hidden attribute, not a dot-prefix. `dir /a:h /b`
-// is a fast cmd builtin that lists (bare) the names carrying that attribute —
-// no native module, one spawn per directory. Empty set on other platforms.
-function getHiddenNames(dirPath) {
-  return new Promise((resolve) => {
-    if (platform() !== 'win32') return resolve(new Set())
-    const child = spawn(`dir /a:h /b "${dirPath}"`, { shell: true, windowsHide: true })
-    let out = ''
-    child.stdout?.on('data', d => { out += d })
-    child.on('error', () => resolve(new Set()))
-    child.on('close', () => {
-      resolve(new Set(out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)))
-    })
-  })
-}
+
 
 contextBridge.exposeInMainWorld('krypta', {
   homeDir: homedir(),
   sep,
   platform: platform(),
 
-  readDir: async (dirPath, { showHidden = false } = {}) => {
-    const entries = await readdir(dirPath, { withFileTypes: true })
-    const hidden = showHidden ? null : await getHiddenNames(dirPath)
-    const filtered = entries
-      .filter(e => showHidden || (!e.name.startsWith('.') && !hidden.has(e.name)))
-      .sort((a, b) => {
-        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
-        return a.name.localeCompare(b.name)
-      })
-    return Promise.all(filtered.map(async e => {
-      let size = null, mtime = null
-      try {
-        const s = await stat(join(dirPath, e.name))
-        size = s.size
-        mtime = s.mtime.getTime()
-      } catch {}
-      let itemCount = null
-      if (e.isDirectory()) {
-        try {
-          const children = await readdir(join(dirPath, e.name))
-          itemCount = children.filter(n => showHidden || !n.startsWith('.')).length
-        } catch {}
-      }
-      return { name: e.name, isDirectory: e.isDirectory(), size, mtime, itemCount }
-    }))
-  },
+  readDirFast: (dirPath, opts) => ipcRenderer.invoke('read-dir-fast', dirPath, opts),
+  statEntries: (dirPath, names, opts) => ipcRenderer.invoke('stat-entries', dirPath, names, opts),
 
   searchFiles: (rootDir, opts = {}) => ipcRenderer.invoke('search-files', rootDir, opts),
 
@@ -298,6 +262,8 @@ contextBridge.exposeInMainWorld('krypta', {
       return { name, markers }
     }))
   },
+
+  getFileIcon: (filePath) => ipcRenderer.invoke('get-file-icon', filePath),
 
   window: {
     close: () => ipcRenderer.send('close-window'),
