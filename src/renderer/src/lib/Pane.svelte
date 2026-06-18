@@ -1,10 +1,15 @@
 <script context="module">
   const appIconCache = new Map()
+  // archivePath -> full flat entry list. Archives don't change while browsing,
+  // so a session-lived cache makes sub-navigation inside an archive instant.
+  const archiveListCache = new Map()
 </script>
 
 <script>
   import { Folder, File, GripVertical, X, ChevronLeft } from 'lucide-svelte'
   import { getFileIcon } from './fileIcons.js'
+  import { isArchivePath } from './archive.js'
+  import { parseLocation, enterArchive, joinInner, parentLocation, locationBaseName, directChildren, displayPath } from './archiveLocation.js'
   import SmartBar from './SmartBar.svelte'
   import ContextMenu from './ContextMenu.svelte'
   import { buildIndex, query as runQuery, invalidateCache, highlightSegments, isKnownTag, suggestTag } from './search.js'
@@ -218,6 +223,7 @@
   // target + clientY + ctrlKey, which is all these need.
   function updateDropTarget(e) {
     if (!pointerDrag) return
+    if (parseLocation(currentDir).inArchive) { dropOverList = false; dropTargetFolder = null; return }  // can't drop into an archive
     const row = e.target.closest('[data-entry-name]')
     if (row) {
       const name = row.dataset.entryName
@@ -251,6 +257,13 @@
 
   function commitDrop(e) {
     if (!pointerDrag) return
+    // Dropping onto an archive pane is refused (write-into deferred). updateDropTarget
+    // never sets a target here, so surface the feedback at drop time instead.
+    if (inArchive) {
+      if (pointerDrag.sourceDir !== currentDir) onError?.(`Can't add files into an archive yet`)
+      clearDropState()
+      return
+    }
     if (dropTargetFolder) {
       const targetDir = window.krypta.joinPath(currentDir, dropTargetFolder)
       if (targetDir !== pointerDrag.sourceDir) onFileDrop?.(targetDir, e.ctrlKey)
@@ -295,6 +308,7 @@
   // shared by pointer (Linux/macOS) and native (Windows) DnD.
   function crumbDragOver(crumbPath) {
     if (!pointerDrag || dropCrumb === crumbPath) return
+    if (parseLocation(crumbPath).inArchive) return  // can't drop into an archive crumb
     dropCrumb = crumbPath
     clearTimeout(crumbHoverTimer)
     if (settings?.springLoad !== false) {
@@ -452,6 +466,16 @@
       if (!selected || !selected.name.toLowerCase().startsWith(filter)) return ''
       return selected.name.slice(filter.length)
     }
+    // Only suggest when the typed directory matches the dir we're listing — otherwise
+    // a path whose dir part didn't resolve (e.g. inside an archive) would show a stale
+    // completion from the previous folder.
+    const lastSlash = lastSepIndex(smartBarQuery)
+    if (lastSlash >= 0) {
+      let nd = smartBarQuery.slice(0, lastSlash + 1).replace(/[/\\]+$/, '')
+      if (nd === '') nd = '/'
+      else if (/^[A-Za-z]:$/.test(nd)) nd += sep
+      if (nd !== currentDir) return ''
+    }
     const filter = smartBarFilter()
     const selected = displayFiles[selectedIndex]
     if (!selected?.isDirectory) return ''
@@ -477,11 +501,31 @@
     }
   })
 
-  let breadcrumbs = $derived(getBreadcrumbs(currentDir))
+  let breadcrumbs = $derived.by(() => {
+    const loc = parseLocation(currentDir)
+    if (!loc.inArchive) return getBreadcrumbs(currentDir)
+    const crumbs = getBreadcrumbs(loc.archivePath)
+    // the archive-file crumb is the boundary; clicking it returns to the archive root
+    const last = crumbs[crumbs.length - 1]
+    crumbs[crumbs.length - 1] = { ...last, path: enterArchive(loc.archivePath), archive: true }
+    let acc = enterArchive(loc.archivePath)
+    if (loc.innerPath) {
+      for (const seg of loc.innerPath.split('/')) {
+        acc = joinInner(acc, seg)
+        crumbs.push({ name: seg, path: acc, inArchive: true })
+      }
+    }
+    return crumbs
+  })
+
+  // True while browsing inside an archive — write ops are disabled (archives are
+  // read-only here; mutating them is a deferred phase). Guards below gate on this.
+  let inArchive = $derived(parseLocation(currentDir).inArchive)
 
   $effect(() => {
     const dir = currentDir
     gitInfo = null
+    if (parseLocation(dir).inArchive) return  // no git inside archives
     window.krypta.getGitInfo(dir).then(info => {
       if (currentDir === dir) gitInfo = info
     }).catch(() => {})
@@ -503,6 +547,7 @@
   async function refreshFiles() {
     try {
       const dir = currentDir
+      if (parseLocation(dir).inArchive) return  // archive contents are static while browsing
       const showHidden = settings?.showHidden === true
       const newFiles = await window.krypta.readDirFast(dir, { showHidden })
       const { mtime } = await window.krypta.statPath(dir)
@@ -604,6 +649,8 @@
   }
 
   async function loadFiles(dir) {
+    const loc = parseLocation(dir)
+    if (loc.inArchive) { await loadArchiveFiles(dir, loc); return }
     try {
       const showHidden = settings?.showHidden === true
       // Phase 1 — instant: names + isDirectory only, render immediately
@@ -643,7 +690,40 @@
     }
   }
 
+  // Browse inside an archive: list (cached) → direct children of the inner path,
+  // mapped to the same shape readDirFast produces so the list/sort/scroll just work.
+  async function loadArchiveFiles(dir, loc) {
+    try {
+      let entries = archiveListCache.get(loc.archivePath)
+      if (!entries) {
+        entries = await window.krypta.listArchive(loc.archivePath)
+        archiveListCache.set(loc.archivePath, entries)
+      }
+      if (currentDir !== dir) return
+      files = directChildren(entries, loc.innerPath).map(f => ({ ...f, isExecutable: false }))
+      loadError = null
+      if (pendingSelectName) {
+        const idx = files.findIndex(f => f.name === pendingSelectName)
+        selectedIndex = idx >= 0 ? idx : 0
+        pendingSelectName = null
+      } else {
+        selectedIndex = 0
+      }
+      dirSizes = {}
+      expandedDates = new Set()
+      selectedNames = new Set()
+      pendingDeleteNames = new Set()
+      fileListScrollTop = 0
+      if (fileListEl) fileListEl.scrollTop = 0
+    } catch {
+      if (currentDir !== dir) return
+      files = []
+      loadError = 'could not read archive'
+    }
+  }
+
   async function loadDirSize(entry) {
+    if (parseLocation(currentDir).inArchive) return  // no recursive-size walk inside archives
     const name = entry.name
     dirSizes = { ...dirSizes, [name]: 'loading' }
     const bytes = await window.krypta.getRecursiveSize(window.krypta.joinPath(currentDir, name))
@@ -671,14 +751,38 @@
       if (showSmartBar) closeSmartBar()
       return
     }
+    const loc = parseLocation(currentDir)
+    if (loc.inArchive) {
+      if (entry.isDirectory) {
+        currentDir = joinInner(currentDir, entry.name)
+      } else {
+        // extract the entry to a scratch dir and open it with the OS
+        const inner = (loc.innerPath ? loc.innerPath + '/' : '') + entry.name
+        window.krypta.openArchiveEntry(loc.archivePath, inner)
+          .catch(() => onError?.('Could not open file from archive'))
+      }
+      return
+    }
     if (entry.isDirectory) {
       currentDir = window.krypta.joinPath(currentDir, entry.name)
+    } else if (isArchivePath(entry.name)) {
+      currentDir = enterArchive(window.krypta.joinPath(currentDir, entry.name))  // browse into the archive
     } else {
       window.krypta.openFile(window.krypta.joinPath(currentDir, entry.name))
     }
   }
 
   function navigateUp() {
+    const loc = parseLocation(currentDir)
+    if (loc.inArchive) {
+      pendingSelectName = locationBaseName(currentDir)
+      // at the archive root, exit to the real folder containing the archive file;
+      // otherwise go up one level within the archive
+      currentDir = loc.innerPath === ''
+        ? window.krypta.parentDir(loc.archivePath)
+        : parentLocation(currentDir)
+      return
+    }
     if (!window.krypta.isRoot(currentDir)) {
       pendingSelectName = baseName(currentDir)
       currentDir = window.krypta.parentDir(currentDir)
@@ -783,6 +887,7 @@
           break
         case 'm': {
           e.preventDefault()
+          if (inArchive) break  // move-mode can't operate on archive contents
           const names = selectedNames.size > 0
             ? new Set(selectedNames)
             : displayFiles[selectedIndex] ? new Set([displayFiles[selectedIndex].name]) : new Set()
@@ -791,6 +896,7 @@
         }
         case 'Enter':
           if (moveMode) {
+            if (inArchive) break  // can't commit a move into an archive (navigate to a real pane)
             onToggleMoveMode?.()
             break
           }
@@ -830,6 +936,7 @@
         case 'x':
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault()
+            if (inArchive) break  // clipboard cut/copy/paste disabled inside archives (use drag to extract out)
             const cutNames = selectedNames.size > 0
               ? new Set(selectedNames)
               : displayFiles[selectedIndex] ? new Set([displayFiles[selectedIndex].name]) : new Set()
@@ -839,6 +946,7 @@
         case 'c':
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault()
+            if (inArchive) break
             const copyNames = selectedNames.size > 0
               ? new Set(selectedNames)
               : displayFiles[selectedIndex] ? new Set([displayFiles[selectedIndex].name]) : new Set()
@@ -854,7 +962,14 @@
         case 'y': {
           e.preventDefault()
           const yankTarget = displayFiles[hoveredIndex >= 0 ? hoveredIndex : selectedIndex]
-          navigator.clipboard.writeText(yankTarget ? window.krypta.joinPath(currentDir, yankTarget.name) : currentDir)
+          let path
+          if (inArchive) {
+            const dp = displayPath(currentDir)
+            path = yankTarget ? dp + '/' + yankTarget.name : dp
+          } else {
+            path = yankTarget ? window.krypta.joinPath(currentDir, yankTarget.name) : currentDir
+          }
+          navigator.clipboard.writeText(path)
           break
         }
         case 'b': {
@@ -927,6 +1042,7 @@
           break
         case 'Delete': {
           e.preventDefault()
+          if (inArchive) break  // can't delete inside an archive
           const targets = selectedNames.size > 0
             ? new Set(selectedNames)
             : displayFiles[selectedIndex] ? new Set([displayFiles[selectedIndex].name]) : new Set()
@@ -964,7 +1080,9 @@
 
   function openSmartBar() {
     smartBarOriginalDir = currentDir
-    smartBarQuery = (currentDir.endsWith('/') || currentDir.endsWith('\\')) ? currentDir : currentDir + sep
+    // inside an archive, show the readable path (currentDir holds a \x00 separator)
+    const base = inArchive ? displayPath(currentDir) : currentDir
+    smartBarQuery = (base.endsWith('/') || base.endsWith('\\')) ? base : base + sep
     selectedIndex = Math.max(0, selectedIndex)
     showSmartBar = true
   }
@@ -1023,6 +1141,10 @@
     const lastSlash = lastSepIndex(query)
     if (lastSlash < 0) return
     const dirPart = query.slice(0, lastSlash + 1)  // includes trailing separator
+
+    // Archive paths can't be read with readDirFast (it'd ENOTDIR on the archive file);
+    // they're resolved on commit by navigateArchivePath. Skip the live nav for them.
+    if (dirPart.split(/[/\\]/).some(seg => seg && isArchivePath(seg))) return
 
     let normalizedDir = dirPart.replace(/[/\\]+$/, '')
     if (normalizedDir === '') normalizedDir = '/'                    // POSIX root
@@ -1118,6 +1240,7 @@
   }
 
   async function trashNames(names) {
+    if (inArchive) return  // can't trash inside an archive
     try {
       const keys = await Promise.all(
         names.map(n => window.krypta.kryptaTrash(window.krypta.joinPath(currentDir, n)))
@@ -1136,6 +1259,16 @@
     contextMenu = { x: e.clientX, y: e.clientY, items: buildContextItems(entry) }
   }
 
+  function scryFromMenu(entry) {
+    const idx = displayFiles.findIndex(f => f.name === entry.name)
+    const offset = creatingType !== null ? 1 : 0
+    const row = idx >= 0 ? fileListEl?.children[idx + offset] : null
+    const paneRect = paneEl?.getBoundingClientRect()
+    const rowRect = row?.getBoundingClientRect()
+    const anchorY = (rowRect && paneRect) ? rowRect.top - paneRect.top : null
+    openScry(entry, anchorY)
+  }
+
   function buildContextItems(entry) {
     // If right-clicked item is part of selection, act on whole selection; otherwise just this item
     const targets = (entry && selectedNames.size > 0 && selectedNames.has(entry.name))
@@ -1146,6 +1279,21 @@
     const sep = { separator: true }
     const items = []
 
+    // Inside an archive: browse-only menu (no write ops, no broken-path items).
+    if (inArchive) {
+      const dp = displayPath(currentDir)
+      if (entry && targets.length === 1) {
+        items.push({ label: 'Open', shortcut: 'Enter', action: () => navigate(entry) })
+        if (entry.isDirectory) items.push({ label: 'Open in New Pane', action: () => onOpenInNewPane?.(joinInner(currentDir, entry.name)) })
+        items.push({ label: 'Scry', shortcut: 'i', action: () => scryFromMenu(entry) })
+        items.push(sep)
+        items.push({ label: 'Copy Path', shortcut: 'y', action: () => navigator.clipboard.writeText(dp + '/' + entry.name) })
+      } else {
+        items.push({ label: 'Copy Path', shortcut: 'y', action: () => navigator.clipboard.writeText(dp) })
+      }
+      return items
+    }
+
     if (entry && targets.length === 1) {
       items.push({ label: 'Open', shortcut: 'Enter', action: () => navigate(entry) })
       if (entry.isDirectory) {
@@ -1154,15 +1302,7 @@
         const isCairned = (cairns ?? []).includes(entryPath)
         items.push({ label: isCairned ? 'Remove from Cairns' : 'Add to Cairns', shortcut: 'b', action: () => onToggleCairn?.(entryPath) })
       }
-      items.push({ label: 'Scry', shortcut: 'i', action: () => {
-        const idx = displayFiles.findIndex(f => f.name === entry.name)
-        const offset = creatingType !== null ? 1 : 0
-        const row = idx >= 0 ? fileListEl?.children[idx + offset] : null
-        const paneRect = paneEl?.getBoundingClientRect()
-        const rowRect = row?.getBoundingClientRect()
-        const anchorY = (rowRect && paneRect) ? rowRect.top - paneRect.top : null
-        openScry(entry, anchorY)
-      }})
+      items.push({ label: 'Scry', shortcut: 'i', action: () => scryFromMenu(entry) })
       items.push({ label: 'Rename', shortcut: 'r', action: () => { renamingName = entry.name; renamingValue = entry.name } })
       items.push(sep)
     }
@@ -1211,7 +1351,7 @@
       : currentDir
     const activePath = entry ? window.krypta.joinPath(currentDir, entry.name) : currentDir
     items.push({ label: 'Open Terminal Here', action: () => window.krypta.openTerminal(terminalDir) })
-    items.push({ label: 'Copy Path', action: () => navigator.clipboard.writeText(activePath) })
+    items.push({ label: 'Copy Path', shortcut: 'y', action: () => navigator.clipboard.writeText(activePath) })
     if (settings?.copyAllPaths && targets.length > 1)
       items.push({ label: 'Copy All Paths', action: () => navigator.clipboard.writeText(targets.map(n => window.krypta.joinPath(currentDir, n)).join('\n')) })
 
@@ -1238,6 +1378,43 @@
     return items
   }
 
+  // Parse a typed/pasted path that includes an archive-file segment into the real
+  // archive path + the inner path after it. Returns null if no archive segment.
+  function parseArchiveQuery(q) {
+    if (lastSepIndex(q) < 0) return null
+    const parts = q.split(/[/\\]/)
+    const i = parts.findIndex(seg => seg && isArchivePath(seg))
+    if (i === -1) return null
+    const before = parts.slice(0, i).filter(Boolean)
+    const archivePath = q.startsWith('/')
+      ? sep + [...before, parts[i]].join(sep)
+      : (/^[A-Za-z]:/.test(q) ? [...before, parts[i]].join(sep) : window.krypta.joinPath(currentDir, ...before, parts[i]))
+    const innerPath = parts.slice(i + 1).filter(Boolean).join('/')
+    return { archivePath, innerPath }
+  }
+
+  // Navigate the bar INTO an archive. Lists to classify the inner path: a dir opens
+  // there; a file opens its parent with the file selected; empty opens the root.
+  async function navigateArchivePath(archivePath, innerPath) {
+    let entries = archiveListCache.get(archivePath)
+    if (!entries) {
+      try { entries = await window.krypta.listArchive(archivePath); archiveListCache.set(archivePath, entries) }
+      catch { onError?.(`Could not read ${baseName(archivePath)}`); return }
+    }
+    if (!innerPath) { currentDir = enterArchive(archivePath); return }
+    const isDir = entries.some(e => e.path === innerPath && e.isDirectory) || entries.some(e => e.path.startsWith(innerPath + '/'))
+    if (isDir) { currentDir = enterArchive(archivePath) + innerPath; return }
+    const isFile = entries.some(e => e.path === innerPath && !e.isDirectory)
+    if (isFile) {
+      const slash = innerPath.lastIndexOf('/')
+      pendingSelectName = slash === -1 ? innerPath : innerPath.slice(slash + 1)
+      currentDir = slash === -1 ? enterArchive(archivePath) : enterArchive(archivePath) + innerPath.slice(0, slash)
+      return
+    }
+    currentDir = enterArchive(archivePath)  // inner path not found — open the archive root
+    onError?.(`"${innerPath}" not found in ${baseName(archivePath)} — opened the archive`)
+  }
+
   function commitSmartBar() {
     if (smartBarCairnsMode) {
       const target = displayFiles[selectedIndex] ?? displayFiles[0]
@@ -1245,6 +1422,12 @@
         currentDir = target._cairnPath
         closeSmartBar()
       }
+      return
+    }
+    const archiveNav = parseArchiveQuery(smartBarQuery)
+    if (archiveNav) {
+      closeSmartBar()
+      navigateArchivePath(archiveNav.archivePath, archiveNav.innerPath)  // async; sets currentDir when ready
       return
     }
     if (!smartBarFilter()) {
@@ -1301,11 +1484,13 @@
   }
 
   function startCreate(type) {
+    if (inArchive) return  // can't create inside an archive
     creatingType = type
     creatingName = ''
   }
 
   function startRename(name) {
+    if (inArchive) return  // can't rename inside an archive
     renamingName = name
     renamingValue = name
   }
@@ -1363,6 +1548,7 @@
   }
 
   async function commitDelete() {
+    if (inArchive) { pendingDeleteNames = new Set(); return }  // can't delete inside an archive
     const names = [...pendingDeleteNames]
     const indices = names
       .map(n => displayFiles.findIndex(f => f.name === n))
@@ -1399,6 +1585,7 @@
   }
 
   async function commitPaste() {
+    if (inArchive) return  // can't paste into an archive
     if (!clipboard) return
     const { dir: sourceDir, names, type } = clipboard
     try {
@@ -1438,17 +1625,54 @@
       scryBelow = true
     }
     scryEntry = { name: entry.name, isDirectory: entry.isDirectory, size: entry.size, mtime: entry.mtime, itemCount: entry.itemCount }
-    const path = entry._cairnPath ?? window.krypta.joinPath(currentDir, entry.name)
     scryLoading = true
     showScry = true
     scryData = null
+
+    // Scrying an entry INSIDE an archive: no real fs path to stat — build metadata
+    // from the entry's own (listing-derived) size/mtime; for a folder, its children
+    // come from the cached archive listing filtered to that inner path.
+    if (inArchive) {
+      const loc = parseLocation(currentDir)
+      const entryInner = (loc.innerPath ? loc.innerPath + '/' : '') + entry.name
+      let children = null
+      if (entry.isDirectory) {
+        let all = archiveListCache.get(loc.archivePath)
+        if (!all) { try { all = await window.krypta.listArchive(loc.archivePath); archiveListCache.set(loc.archivePath, all) } catch { all = [] } }
+        children = directChildren(all, entryInner).map(e => ({ name: e.name, isDirectory: e.isDirectory }))
+      }
+      scryData = {
+        path: displayPath(currentDir) + '/' + entry.name,
+        name: entry.name,
+        isDirectory: entry.isDirectory,
+        isArchive: false,
+        stat: { size: entry.size, mtime: entry.mtime, mode: null },
+        children,
+      }
+      scryLoading = false
+      return
+    }
+
+    const path = entry._cairnPath ?? window.krypta.joinPath(currentDir, entry.name)
     try {
       const statResult = await window.krypta.statPath(path)
       let children = null
+      let isArchive = false
       if (entry.isDirectory) {
         children = await window.krypta.readDirNames(path)
+      } else if (isArchivePath(entry.name)) {
+        isArchive = true
+        try {
+          // Flat list of all entries (Krypta's Scry doesn't branch). Normalize to
+          // the same {name, isDirectory} shape folders use so .scry-children renders
+          // unchanged; the full internal path is the display name.
+          const archiveEntries = await window.krypta.listArchive(path)
+          children = archiveEntries.map(e => ({ name: e.path, isDirectory: e.isDirectory }))
+        } catch {
+          children = null  // corrupt / unreadable — show "could not read archive"
+        }
       }
-      scryData = { path, name: entry.name, isDirectory: entry.isDirectory, stat: statResult, children }
+      scryData = { path, name: entry.name, isDirectory: entry.isDirectory, isArchive, stat: statResult, children }
     } finally {
       scryLoading = false
     }
@@ -1605,7 +1829,7 @@
         onmouseleave={handleBreadcrumbMouseLeave}
       >
         {#each breadcrumbs as crumb, i}
-          {#if i > 0}<span class="sep">›</span>{/if}
+          {#if i > 0}<span class="sep" class:sep-archive={crumb.archive}>{crumb.archive ? '┊' : '›'}</span>{/if}
           {#if isWindows && i === 0}
             <button
               class="crumb drive-switch"
@@ -1617,6 +1841,8 @@
             <button
               class="crumb"
               class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)}
+              class:archive={crumb.archive}
+              class:in-archive={crumb.inArchive}
               class:drop-target={dropCrumb === crumb.path}
               onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { currentDir = crumb.path } }}
               oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}
@@ -1629,7 +1855,7 @@
               ondrop={(e) => { if (!pointerDrag) return; e.preventDefault(); crumbDrop(e, crumb.path) }}
             >{crumb.name}</button>
           {:else}
-            <button class="crumb" class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)} onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { openSmartBar() } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
+            <button class="crumb" class:git-dir={gitInfo && isUnder(crumb.path, gitInfo.root)} class:archive={crumb.archive} class:in-archive={crumb.inArchive} onclick={(e) => { if ((e.ctrlKey || e.metaKey) && e.shiftKey) { onOpenInNewPane?.(crumb.path) } else { if (crumb.archive || crumb.inArchive) { currentDir = crumb.path } else { openSmartBar() } } }} oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); contextMenu = { x: e.clientX, y: e.clientY, items: [{ label: 'Open in New Pane', shortcut: 'Ctrl+Shift+Click', action: () => onOpenInNewPane?.(crumb.path) }, { label: 'Open Terminal Here', action: () => window.krypta.openTerminal(crumb.path) }, { label: 'Copy Path', action: () => navigator.clipboard.writeText(crumb.path) }] } }}>{crumb.name}</button>
           {/if}
         {/each}
       </div>
@@ -1842,7 +2068,7 @@
     <div class="vscroll-spacer" style="height: {virtualSlice.paddingBottom}px" aria-hidden="true"></div>
   </div>
 
-  {#if settings?.showCreateBtn !== false}
+  {#if settings?.showCreateBtn !== false && !inArchive}
     <button
       class="create-btn"
       class:open={!!contextMenu?.fromCreate}
@@ -1861,10 +2087,12 @@
         {#if scryLoading || !scryData}
           <div class="scry-loading">scrying…</div>
         {:else}
-          {#if scryData.isDirectory}
+          {#if scryData.isDirectory || scryData.isArchive}
             <div class="scry-children" bind:this={scryChildrenEl}>
-              {#if scryData.children.length === 0}
-                <div class="scry-empty">empty folder</div>
+              {#if scryData.children == null}
+                <div class="scry-empty">could not read archive</div>
+              {:else if scryData.children.length === 0}
+                <div class="scry-empty">empty {scryData.isArchive ? 'archive' : 'folder'}</div>
               {:else}
                 {#each scryData.children as child}
                   <div class="scry-child-row">
@@ -1882,17 +2110,18 @@
               {/if}
             </div>
           {/if}
-          <div class="scry-meta" class:standalone={!scryData.isDirectory}>
+          <div class="scry-meta" class:standalone={!scryData.isDirectory && !scryData.isArchive}>
             <div class="scry-meta-row">
               <span class="scry-meta-key">path</span>
               <span class="scry-meta-val scry-path">{scryData.path}</span>
             </div>
-            {#if scryData.isDirectory}
+            {#if scryData.isDirectory || scryData.isArchive}
               <div class="scry-meta-row">
                 <span class="scry-meta-key">items</span>
-                <span class="scry-meta-val">{scryData.children.length} {scryData.children.length === 1 ? 'item' : 'items'}</span>
+                <span class="scry-meta-val">{scryData.children?.length ?? 0} {(scryData.children?.length ?? 0) === 1 ? 'item' : 'items'}</span>
               </div>
-            {:else}
+            {/if}
+            {#if !scryData.isDirectory}
               <div class="scry-meta-row">
                 <span class="scry-meta-key">size</span>
                 <span class="scry-meta-val">{formatSize(scryData.stat.size, false)}</span>
@@ -2036,6 +2265,14 @@
     font-size: 10px;
     opacity: 0.25;
     padding: 0 1px;
+  }
+
+  /* boundary separator where the trail "cuts into" an archive — a dashed seam.
+     Same spacing as the chevrons; only the glyph and a touch more opacity differ */
+  .sep.sep-archive {
+    font-size: 11px;
+    opacity: 0.5;
+    padding: 0;
   }
 
   .drive-backdrop {
@@ -2216,6 +2453,10 @@
   }
 
   .crumb.git-dir { color: #F05032; }
+  /* archive boundary + everything inside it: recessed grey (matches non-sorted column
+     headers) to signal you've left the real fs; brightens on hover like other crumbs */
+  .crumb.archive, .crumb.in-archive { color: var(--text-dim); opacity: 0.6; }
+  .crumb.archive:hover, .crumb.in-archive:hover { color: var(--text); opacity: 1; }
 
   .git-badge {
     font-size: 9px;

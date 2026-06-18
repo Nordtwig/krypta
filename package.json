@@ -26,18 +26,26 @@
       "out/**",
       "resources/icons/32x32.png"
     ],
+    "asarUnpack": [
+      "**/node_modules/7zip-bin/**"
+    ],
     "publish": {
       "provider": "github",
       "owner": "Nordtwig",
       "repo": "krypta"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "resources/icons",
       "category": "Utility"
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "resources/icons/icon.ico"
     },
     "nsis": {
@@ -59,8 +67,10 @@
     "esbuild@0.25.12": true
   },
   "dependencies": {
+    "7zip-bin": "^5.2.0",
     "electron-updater": "^6.8.9",
     "fuse.js": "^7.4.2",
-    "lucide-svelte": "^1.0.1"
+    "lucide-svelte": "^1.0.1",
+    "node-7z": "^3.0.0"
   }
 }

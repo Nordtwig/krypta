@@ -9,6 +9,7 @@
   import KryptaLogo from './lib/KryptaLogo.svelte'
   import { getFileIcon } from './lib/fileIcons.js'
   import { isUnder, isWindows } from './lib/paths.js'
+  import { parseLocation } from './lib/archiveLocation.js'
 
   const COMFORTABLE = 300
   const DEFAULT_WIDTH = 450
@@ -266,10 +267,13 @@
     }
   }
 
-  function showToast(message) {
+  function showToast(message, duration) {
     clearTimeout(toastTimer)
     toast = { message, id: Date.now() }
-    toastTimer = setTimeout(() => { toast = null }, 2500)
+    // scale with reading time: ~45ms/char on top of a 2s floor, capped at 7s.
+    // An explicit `duration` (ms) overrides.
+    const ms = duration ?? Math.min(7000, Math.max(2500, 2000 + message.length * 45))
+    toastTimer = setTimeout(() => { toast = null }, ms)
   }
 
   async function addPaneObject(afterIndex, paneObj) {
@@ -484,6 +488,29 @@
     handleFileDragEnd()
     if (targetDir === sourceDir) return
     const nameArr = [...names]
+
+    // Writing into an archive isn't supported (deferred); archive panes also don't
+    // accept drops, but guard here too in case a drop lands via a breadcrumb.
+    if (parseLocation(targetDir).inArchive) {
+      showToast(`Can't add files into an archive yet`)
+      return
+    }
+
+    // Extract OUT: dragging from inside an archive to a real folder. Always a copy
+    // (extraction never removes from the archive); no undo history (just new files).
+    // Each item lands flattened to its basename; main resolves file-vs-folder.
+    const src = parseLocation(sourceDir)
+    if (src.inArchive) {
+      const innerPaths = nameArr.map(name => (src.innerPath ? src.innerPath + '/' : '') + name)
+      try {
+        await window.krypta.extractItems(src.archivePath, innerPaths, targetDir)
+        handleChanged(targetDir)
+      } catch (e) {
+        showToast(`Couldn't extract ${nameArr.length === 1 ? `"${nameArr[0]}"` : `${nameArr.length} items`} — ${e?.message ?? e}`)
+      }
+      return
+    }
+
     try {
       if (isCopy) {
         await Promise.all(nameArr.map(name =>
@@ -1092,7 +1119,7 @@
 
   .toast {
     position: fixed;
-    bottom: 20px;
+    bottom: 25px;
     left: 50%;
     transform: translateX(-50%);
     background: var(--bg-raised);

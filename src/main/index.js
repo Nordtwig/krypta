@@ -4,6 +4,7 @@ import { join } from 'path'
 import { readdir, rm, mkdir, stat } from 'fs/promises'
 import { homedir, platform } from 'os'
 import { spawn } from 'child_process'
+import { listArchive, extractEntry, extractItems } from './archive.js'
 
 const IS_WIN = platform() === 'win32'
 
@@ -157,6 +158,7 @@ function createWindow() {
 
 app.on('ready', () => {
   flushKryptaTrash()  // fire-and-forget; sweep leftovers from a previous crash
+  rm(join(app.getPath('temp'), 'krypta-archive-tmp'), { recursive: true, force: true }).catch(() => {})  // sweep extracted-to-open files
   createWindow()
   if (!process.env['ELECTRON_RENDERER_URL']) autoUpdater.checkForUpdatesAndNotify().catch(() => {})
 })
@@ -193,6 +195,19 @@ ipcMain.handle('set-window-bounds', (_, { x, y, width, height }) => {
   win?.setBounds({ x, y, width, height })
 })
 
+ipcMain.handle('list-archive', (_, filePath) => listArchive(filePath))
+ipcMain.handle('extract-entry', (_, archivePath, innerPath, destDir) => extractEntry(archivePath, innerPath, destDir))
+ipcMain.handle('extract-items', (_, archivePath, innerPaths, destDir) => extractItems(archivePath, innerPaths, destDir))
+
+// Extract a file out of an archive to a scratch dir and open it with the OS.
+// The scratch dir is swept on startup (see app 'ready'), so opened files are ephemeral.
+const archiveTmpDir = () => join(app.getPath('temp'), 'krypta-archive-tmp')
+ipcMain.handle('open-archive-entry', async (_, archivePath, innerPath) => {
+  const target = await extractEntry(archivePath, innerPath, archiveTmpDir())
+  const err = await shell.openPath(target)
+  if (err) throw new Error(err)
+  return target
+})
 ipcMain.handle('read-dir-fast', (_, dirPath, opts) => readDirFast(dirPath, opts))
 ipcMain.handle('stat-entries', (_, dirPath, names, opts) => statEntries(dirPath, names, opts))
 ipcMain.handle('search-files', (_, rootDir, opts) => walkDir(rootDir, opts))

@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('krypta', {
   readDirFast: (dirPath, opts) => ipcRenderer.invoke('read-dir-fast', dirPath, opts),
   statEntries: (dirPath, names, opts) => ipcRenderer.invoke('stat-entries', dirPath, names, opts),
 
+  listArchive: (filePath) => ipcRenderer.invoke('list-archive', filePath),
+  extractEntry: (archivePath, innerPath, destDir) => ipcRenderer.invoke('extract-entry', archivePath, innerPath, destDir),
+  extractItems: (archivePath, innerPaths, destDir) => ipcRenderer.invoke('extract-items', archivePath, innerPaths, destDir),
+  openArchiveEntry: (archivePath, innerPath) => ipcRenderer.invoke('open-archive-entry', archivePath, innerPath),
+
   searchFiles: (rootDir, opts = {}) => ipcRenderer.invoke('search-files', rootDir, opts),
 
   // Native OS drag-out (Windows/macOS/X11): start an OS-level drag of real files
