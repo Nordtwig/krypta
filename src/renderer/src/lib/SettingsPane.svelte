@@ -1,5 +1,5 @@
 <script>
-  import { Trash2, Terminal, SlidersHorizontal, Keyboard, Plus, ChevronRight, ChevronLeft, GripVertical, RotateCcw, X } from 'lucide-svelte'
+  import { Trash2, Terminal, SlidersHorizontal, Keyboard, Plus, ChevronRight, PanelLeftClose, GripVertical, RotateCcw, X } from 'lucide-svelte'
 
   const DEFAULTS = {
     useKryptaTrash:    true,
@@ -310,7 +310,7 @@
     class="pathbar"
     class:pane-drag-over={paneDragOver}
   >
-    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
+    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><PanelLeftClose size={12} strokeWidth={1.75} /></button>
     {#if sectionLabel}
       <button class="crumb" onclick={() => { section = 'root'; selectedIndex = 0 }}>Settings</button>
       <span class="sep">›</span>
@@ -601,6 +601,8 @@
     border: none;
     background: none;
     padding: 0;
+    margin-left: -4px;
+    margin-right: 2px;
     cursor: pointer;
     color: var(--text-dim);
     display: flex;

@@ -1,12 +1,13 @@
 <script>
   import { onMount } from 'svelte'
-  import { isKnownTag } from './search.js'
+  import { isKnownTag, suggestTag } from './search.js'
   import { sep, lastSepIndex } from './paths.js'
 
   let { query = $bindable(), placeholder = '', onInput, onSubmit, onCancel, onArrow, onTab, onScry, ghostSuffix = '', chips = [], onChipAdd, onChipRemove } = $props()
 
   let inputEl = $state(null)
   let ghostInnerEl = $state(null)
+  let chipFocusIndex = $state(-1)
 
   onMount(() => {
     if (inputEl) {
@@ -27,12 +28,41 @@
     if (e.key === 'Escape') {
       e.preventDefault()
       e.stopPropagation()
+      if (chipFocusIndex >= 0) { chipFocusIndex = -1; return }
       onCancel?.()
     } else if (e.key === 'Tab') {
       e.preventDefault()
       e.stopPropagation()
+      chipFocusIndex = -1
       onTab?.()
+    } else if (e.key === 'ArrowLeft' && !e.ctrlKey && !e.metaKey) {
+      if (chipFocusIndex >= 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        chipFocusIndex = Math.max(0, chipFocusIndex - 1)
+      } else if (chips.length > 0 && inputEl?.selectionStart === 0 && inputEl?.selectionEnd === 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        chipFocusIndex = chips.length - 1
+      }
+    } else if (e.key === 'ArrowRight' && !e.ctrlKey && !e.metaKey) {
+      if (chipFocusIndex >= 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (chipFocusIndex < chips.length - 1) {
+          chipFocusIndex++
+        } else {
+          chipFocusIndex = -1
+        }
+      }
     } else if (e.key === 'Backspace') {
+      if (chipFocusIndex >= 0) {
+        e.preventDefault()
+        e.stopPropagation()
+        onChipRemove?.(chips[chipFocusIndex])
+        chipFocusIndex = Math.max(-1, chipFocusIndex - 1)
+        return
+      }
       const atEnd = inputEl?.selectionStart === query.length && inputEl?.selectionEnd === query.length
       if (atEnd && query === '?' && chips.length > 0) {
         e.preventDefault()
@@ -49,12 +79,15 @@
     } else if (e.key === 'Enter') {
       e.preventDefault()
       e.stopPropagation()
+      chipFocusIndex = -1
       onSubmit()
     } else if (e.key === 'ArrowDown') {
+      chipFocusIndex = -1
       e.preventDefault()
       e.stopPropagation()
       onArrow?.(1)
     } else if (e.key === 'ArrowUp') {
+      chipFocusIndex = -1
       e.preventDefault()
       e.stopPropagation()
       onArrow?.(-1)
@@ -62,13 +95,15 @@
       e.preventDefault()
       e.stopPropagation()
       onScry?.()
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      chipFocusIndex = -1
     }
   }
 </script>
 
 <div class="smartbar">
-  {#each chips as chip}
-    <span class="chip" class:unknown={!isKnownTag(chip)}>
+  {#each chips as chip, ci}
+    <span class="chip" class:unknown={!isKnownTag(chip)} class:chip-focused={ci === chipFocusIndex && chipFocusIndex < chips.length}>
       #{chip}<button
         class="chip-remove"
         onmousedown={(e) => { e.preventDefault(); onChipRemove?.(chip) }}
@@ -103,7 +138,9 @@
             const cleaned = val.replace(/#(\w+)\s/g, (_, tag) => { extracted.push(tag); return '' })
             if (extracted.length) {
               for (const tag of extracted) {
-                if (!chips.includes(tag)) onChipAdd?.(tag)
+                const resolved = isKnownTag(tag) ? tag : (suggestTag(tag) ?? tag)
+                if (chips.includes(resolved)) onChipRemove?.(resolved)
+                else onChipAdd?.(resolved)
               }
               val = cleaned
               e.currentTarget.value = cleaned
@@ -150,6 +187,11 @@
     background: var(--pink);
   }
 
+  .chip.chip-focused {
+    outline: 1.5px solid rgba(238, 228, 202, 0.55);
+    outline-offset: 1px;
+  }
+
   .chip-remove {
     background: none;
     border: none;
@@ -187,6 +229,8 @@
     font-size: 12px;
     font-family: inherit;
     padding: 0;
+    position: relative;
+    top: 1px;
   }
 
   .ghost-spacer {

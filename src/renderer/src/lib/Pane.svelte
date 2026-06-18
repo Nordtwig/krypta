@@ -6,7 +6,7 @@
 </script>
 
 <script>
-  import { Folder, File, GripVertical, X, ChevronLeft } from 'lucide-svelte'
+  import { Folder, File, GripVertical, X, PanelLeftClose } from 'lucide-svelte'
   import { getFileIcon } from './fileIcons.js'
   import { isArchivePath } from './archive.js'
   import { parseLocation, enterArchive, joinInner, parentLocation, locationBaseName, directChildren, displayPath } from './archiveLocation.js'
@@ -456,8 +456,7 @@
         const suggestion = suggestTag(tagMatch[1])
         return suggestion ? suggestion.slice(tagMatch[1].length) : ''
       }
-      if (smartBarQuery !== '?') return ''
-      return relHome(currentDir)
+      return ''
     }
     if (smartBarCairnsMode) {
       const filter = smartBarQuery.slice(1).toLowerCase()
@@ -829,6 +828,7 @@
           e.preventDefault()
           pendingDeleteNames = new Set()
           keyboardActive = true
+          hoveredIndex = -1
           if (e.shiftKey) {
             selectedIndex = selectedIndex < 0 ? 0 : Math.min(selectedIndex + 1, displayFiles.length - 1)
             selectRange(anchorIndex, selectedIndex)
@@ -842,6 +842,7 @@
           e.preventDefault()
           pendingDeleteNames = new Set()
           keyboardActive = true
+          hoveredIndex = -1
           if (e.shiftKey) {
             selectedIndex = selectedIndex < 0 ? displayFiles.length - 1 : Math.max(selectedIndex - 1, 0)
             selectRange(anchorIndex, selectedIndex)
@@ -1119,6 +1120,7 @@
     showSmartBar = false
     smartBarQuery = ''
     smartBarOriginalDir = null
+    smartBarChips = []
   }
 
   function cancelSmartBar() {
@@ -1163,9 +1165,10 @@
       const q = smartBarQuery.slice(1)
       const tagMatch = q.match(/#(\w+)$/)
       if (tagMatch) {
-        const suggestion = suggestTag(tagMatch[1])
+        const suggestion = suggestTag(tagMatch[1]) ?? (isKnownTag(tagMatch[1]) ? tagMatch[1] : null)
         if (suggestion) {
-          if (!smartBarChips.includes(suggestion)) smartBarChips = [...smartBarChips, suggestion]
+          if (smartBarChips.includes(suggestion)) smartBarChips = smartBarChips.filter(t => t !== suggestion)
+          else smartBarChips = [...smartBarChips, suggestion]
           smartBarQuery = '?' + q.slice(0, q.length - tagMatch[0].length).trimEnd()
           handleSmartBarInput(smartBarQuery)
         }
@@ -1416,6 +1419,21 @@
   }
 
   function commitSmartBar() {
+    if (smartBarSearchMode) {
+      const q = smartBarQuery.slice(1)
+      const tagMatch = q.match(/#(\w+)$/)
+      if (tagMatch) {
+        const tag = suggestTag(tagMatch[1]) ?? tagMatch[1]
+        if (smartBarChips.includes(tag)) smartBarChips = smartBarChips.filter(t => t !== tag)
+        else smartBarChips = [...smartBarChips, tag]
+        smartBarQuery = '?' + q.slice(0, q.length - tagMatch[0].length).trimEnd()
+        handleSmartBarInput(smartBarQuery)
+        return
+      }
+      const target = displayFiles[Math.min(selectedIndex, displayFiles.length - 1)] ?? displayFiles[0]
+      if (target) { closeSmartBar(); navigate(target) }
+      return
+    }
     if (smartBarCairnsMode) {
       const target = displayFiles[selectedIndex] ?? displayFiles[0]
       if (target?._cairnPath) {
@@ -1443,6 +1461,7 @@
   function handleSmartBarArrow(dir) {
     selectedIndex = Math.max(0, Math.min(selectedIndex + dir, displayFiles.length - 1))
     keyboardActive = true
+    hoveredIndex = -1
   }
 
   function formatSize(bytes, isDir) {
@@ -1817,11 +1836,14 @@
           openScry(entry, (rowRect && paneRect) ? rowRect.top - paneRect.top : null)
         }}
         chips={smartBarSearchMode ? smartBarChips : []}
-        onChipAdd={(tag) => { if (!smartBarChips.includes(tag)) smartBarChips = [...smartBarChips, tag] }}
+        onChipAdd={(tag) => {
+          if (smartBarChips.includes(tag)) smartBarChips = smartBarChips.filter(t => t !== tag)
+          else smartBarChips = [...smartBarChips, tag]
+        }}
         onChipRemove={(tag) => { smartBarChips = smartBarChips.filter(t => t !== tag) }}
       />
     {:else}
-      <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
+      <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><PanelLeftClose size={12} strokeWidth={1.75} /></button>
       <div
         class="breadcrumbs"
         bind:this={breadcrumbsEl}
@@ -1955,7 +1977,7 @@
     {#if virtualSlice.paddingTop > 0}
       <div class="vscroll-spacer" style="height: {virtualSlice.paddingTop}px" aria-hidden="true"></div>
     {/if}
-    {#each displayFiles.slice(virtualSlice.start, virtualSlice.end) as entry, vi (entry.name)}
+    {#each displayFiles.slice(virtualSlice.start, virtualSlice.end) as entry, vi (entry._searchPath ?? entry.name)}
       {@const i = virtualSlice.start + vi}
       {#if dropInsertIndex === i && dropOverList && !dropTargetFolder}
         <div class="drop-line"></div>
@@ -2254,6 +2276,7 @@
 
   .crumb:hover { color: var(--text); }
   .crumb:last-child { color: var(--text); }
+  .breadcrumbs > .crumb:first-child { position: relative; top: 1px; }
   .crumb.drop-target {
     color: var(--emerald);
     background: rgba(80, 200, 120, 0.12);
@@ -2728,6 +2751,8 @@
     border: none;
     background: none;
     padding: 0;
+    margin-left: -4px;
+    margin-right: 2px;
     cursor: pointer;
     color: var(--text-dim);
     display: flex;

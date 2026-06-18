@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Krypta
+Comment=Keyboard-first file explorer
+Exec=/home/nosey/development/krypta/dist/Krypta-0.2.0.AppImage
+Icon=krypta
+Type=Application
+Categories=Utility;FileManager;
+Keywords=files;explorer;krypta;
+StartupWMClass=krypta
+StartupNotify=true

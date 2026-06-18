@@ -1,5 +1,5 @@
 <script>
-  import { Folder, GripVertical, X, ChevronLeft } from 'lucide-svelte'
+  import { Folder, GripVertical, X, PanelLeftClose } from 'lucide-svelte'
   import ContextMenu from './ContextMenu.svelte'
   import { baseName } from './paths.js'
 
@@ -122,7 +122,7 @@
   }}
 >
   <div class="pathbar" class:pane-drag-over={paneDragOver}>
-    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
+    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><PanelLeftClose size={12} strokeWidth={1.75} /></button>
     <span class="cairns-label">Cairns</span>
     <div class="pane-actions">
       <button class="pane-action-btn" onclick={onAddPane} title="New pane">+</button>
@@ -275,6 +275,8 @@
     border: none;
     background: none;
     padding: 0;
+    margin-left: -4px;
+    margin-right: 2px;
     cursor: pointer;
     color: var(--text-dim);
     display: flex;

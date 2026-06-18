@@ -1,5 +1,5 @@
 <script>
-  import { Folder, GripVertical, X, ChevronLeft, Search } from 'lucide-svelte'
+  import { Folder, GripVertical, X, PanelLeftClose, Search } from 'lucide-svelte'
   import { getFileIcon } from './fileIcons.js'
   import { buildIndex, query as runQuery, highlightSegments, isKnownTag, suggestTag } from './search.js'
   import { relHome } from './paths.js'
@@ -32,6 +32,8 @@
   let isDraggingThisPane = $state(false)
   let paneDragOver = $state(false)
   let searchIndex = null
+
+  let chipFocusIndex = $state(-1)
 
   let showScry = $state(false)
   let scryChildrenEl = $state(null)
@@ -189,9 +191,20 @@
   function commitTagSuggestion() {
     const m = searchInput.match(/#(\w+)$/)
     if (!m || !m[1]) return false
-    const suggestion = suggestTag(m[1])
+    const suggestion = suggestTag(m[1]) ?? (isKnownTag(m[1]) ? m[1] : null)
     if (!suggestion) return false
-    if (!chips.includes(suggestion)) chips = [...chips, suggestion]
+    if (chips.includes(suggestion)) chips = chips.filter(t => t !== suggestion)
+    else chips = [...chips, suggestion]
+    searchInput = searchInput.slice(0, searchInput.length - m[0].length).trimEnd()
+    return true
+  }
+
+  function commitAnyTag() {
+    const m = searchInput.match(/#(\w+)$/)
+    if (!m || !m[1]) return false
+    const tag = suggestTag(m[1]) ?? m[1]
+    if (chips.includes(tag)) chips = chips.filter(t => t !== tag)
+    else chips = [...chips, tag]
     searchInput = searchInput.slice(0, searchInput.length - m[0].length).trimEnd()
     return true
   }
@@ -206,9 +219,6 @@
         } else if (e.key === 'ArrowUp') {
           e.preventDefault()
           selectedIndex = Math.max(selectedIndex - 1, 0)
-        } else if (e.key === 'Tab') {
-          e.preventDefault()
-          commitTagSuggestion()
         } else if (e.key === 'Enter') {
           e.preventDefault()
           if (results[selectedIndex]) navigate(results[selectedIndex], (e.ctrlKey || e.metaKey) && e.shiftKey, false)
@@ -283,10 +293,10 @@
   }}
 >
   <div class="pathbar" class:pane-drag-over={paneDragOver}>
-    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><ChevronLeft size={10} strokeWidth={2.5} /></button>
+    <button class="pane-collapse-btn" onclick={onCollapse} title="Collapse pane"><PanelLeftClose size={12} strokeWidth={1.75} /></button>
     <span class="search-icon"><Search size={12} strokeWidth={2} /></span>
-    {#each chips as chip}
-      <span class="chip" class:unknown={!isKnownTag(chip)}>
+    {#each chips as chip, ci}
+      <span class="chip" class:unknown={!isKnownTag(chip)} class:chip-focused={ci === chipFocusIndex && chipFocusIndex < chips.length}>
         #{chip}<button
           class="chip-remove"
           onmousedown={(e) => { e.preventDefault(); chips = chips.filter(t => t !== chip) }}
@@ -313,15 +323,51 @@
           const extracted = []
           const cleaned = val.replace(/#(\w+)\s/g, (_, tag) => { extracted.push(tag); return '' })
           if (extracted.length) {
-            chips = [...chips, ...extracted.filter(t => !chips.includes(t))]
+            for (const tag of extracted) {
+              const resolved = isKnownTag(tag) ? tag : (suggestTag(tag) ?? tag)
+              if (chips.includes(resolved)) chips = chips.filter(t => t !== resolved)
+              else chips = [...chips, resolved]
+            }
             e.currentTarget.value = cleaned
             searchInput = cleaned
           }
         }}
         onkeydown={(e) => {
-          if (e.key === 'Backspace' && searchInput === '' && chips.length > 0) {
+          if (e.key === 'Tab') {
             e.preventDefault()
-            chips = chips.slice(0, -1)
+            e.stopPropagation()
+            commitTagSuggestion()
+          } else if (e.key === 'Enter') {
+            if (commitAnyTag()) {
+              e.preventDefault()
+              e.stopPropagation()
+            }
+          } else if (e.key === 'ArrowLeft' && !e.ctrlKey && !e.metaKey) {
+            if (chipFocusIndex >= 0) {
+              e.preventDefault()
+              chipFocusIndex = Math.max(0, chipFocusIndex - 1)
+            } else if (chips.length > 0 && inputEl?.selectionStart === 0 && inputEl?.selectionEnd === 0) {
+              e.preventDefault()
+              chipFocusIndex = chips.length - 1
+            }
+          } else if (e.key === 'ArrowRight' && !e.ctrlKey && !e.metaKey) {
+            if (chipFocusIndex >= 0) {
+              e.preventDefault()
+              if (chipFocusIndex < chips.length - 1) chipFocusIndex++
+              else chipFocusIndex = -1
+            }
+          } else if (e.key === 'Backspace') {
+            if (chipFocusIndex >= 0) {
+              e.preventDefault()
+              const toRemove = chips[chipFocusIndex]
+              chips = chips.filter(t => t !== toRemove)
+              chipFocusIndex = Math.max(-1, chipFocusIndex - 1)
+            } else if (searchInput === '' && chips.length > 0) {
+              e.preventDefault()
+              chips = chips.slice(0, -1)
+            }
+          } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+            chipFocusIndex = -1
           }
         }}
       />
@@ -501,6 +547,10 @@
     white-space: nowrap;
   }
   .chip.unknown { background: var(--pink); }
+  .chip.chip-focused {
+    outline: 1.5px solid rgba(238, 228, 202, 0.55);
+    outline-offset: 1px;
+  }
   .chip-remove {
     background: none;
     border: none;
@@ -536,6 +586,8 @@
     white-space: pre;
     font-size: 12px;
     font-family: inherit;
+    position: relative;
+    top: 1px;
   }
 
   .ghost-spacer { visibility: hidden; }
@@ -590,7 +642,7 @@
 
   .pane-collapse-btn {
     flex-shrink: 0; width: 18px; height: 18px;
-    border: none; background: none; padding: 0;
+    border: none; background: none; padding: 0; margin-left: -4px; margin-right: 2px;
     cursor: pointer; color: var(--text-dim);
     display: flex; align-items: center; justify-content: center;
     opacity: 0; transition: opacity 0.15s, color 0.1s;

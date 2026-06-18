@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { Folder, File, Star, SlidersHorizontal, ChevronRight, GripVertical } from 'lucide-svelte'
+  import { Folder, File, Star, SlidersHorizontal, PanelLeftOpen, GripVertical } from 'lucide-svelte'
   import Titlebar from './lib/Titlebar.svelte'
   import Pane from './lib/Pane.svelte'
   import SettingsPane from './lib/SettingsPane.svelte'
@@ -806,7 +806,7 @@
         e.preventDefault()
         e.stopImmediatePropagation()
         focusedPane = Math.min(panes.length - 1, focusedPane + 1)
-      } else if (e.key === 'Tab') {
+      } else if (e.key === 'Tab' && document.activeElement?.tagName !== 'INPUT') {
         e.preventDefault()
         focusedPane = e.shiftKey
           ? (focusedPane - 1 + panes.length) % panes.length
@@ -869,7 +869,7 @@
             if (!isNaN(from) && from !== i) handlePaneDrop(from, i)
           }}
         >
-          <span class="strip-expand"><ChevronRight size={10} strokeWidth={2} /></span>
+          <span class="strip-expand"><PanelLeftOpen size={12} strokeWidth={1.75} /></span>
           <div class="strip-content">
             <span class="strip-icon">
               {#if pane.type === 'settings'}
@@ -1048,7 +1048,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 6px 0;
+    padding: 9px 0 6px;
     gap: 6px;
     border-right: 1px solid var(--border);
     cursor: pointer;
@@ -1111,6 +1111,10 @@
   .strip-expand {
     display: flex;
     flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
     color: var(--text-dim);
     opacity: 0.25;
     transition: opacity 0.15s, color 0.15s;

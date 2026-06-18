@@ -1,6 +1,6 @@
 import {
   File,
-  FileArchive,
+  Layers,
   FileBraces,
   FileBox,
   FileCode,
@@ -221,16 +221,16 @@ const EXT_MAP = {
   ogv: FileVideoCamera, '3gp': FileVideoCamera, '3g2': FileVideoCamera,
   mpeg: FileVideoCamera, mpg: FileVideoCamera,
 
-  // Archives
-  zip: FileArchive, tar: FileArchive,
-  gz: FileArchive, gzip: FileArchive,
-  bz2: FileArchive, bzip2: FileArchive,
-  xz: FileArchive, zst: FileArchive, zstd: FileArchive,
-  '7z': FileArchive, rar: FileArchive,
-  deb: FileArchive, rpm: FileArchive,
-  iso: FileArchive, dmg: FileArchive, img: FileArchive,
-  jar: FileArchive, war: FileArchive, ear: FileArchive,
-  apk: FileArchive, ipa: FileArchive,
+  // Layerss
+  zip: Layers, tar: Layers,
+  gz: Layers, gzip: Layers,
+  bz2: Layers, bzip2: Layers,
+  xz: Layers, zst: Layers, zstd: Layers,
+  '7z': Layers, rar: Layers,
+  deb: Layers, rpm: Layers,
+  iso: Layers, dmg: Layers, img: Layers,
+  jar: Layers, war: Layers, ear: Layers,
+  apk: Layers, ipa: Layers,
 
   // Executables (stage 1: generic box — see app icons roadmap for stages 2+3)
   exe: FileBox, msi: FileBox, appimage: FileBox,
